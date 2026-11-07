@@ -15,6 +15,6 @@ On jump, any agent (Claude, Codex, Kiro) uses the `hub` command (~/.local/bin/hu
 Rules for agents
 - One flash at a time (the hub serializes); tell the others in tmux before reflashing a node.
 - Never flash SP1 / B3 LoRa transmit tests unless the antenna is soldered (user confirms).
-- Nodes: CP (COM4, MAC 98:c3:77:62:67:24), B2 (COM9, 98:c3:77:63:3A:48), B3 (COM11, 98:c3:77:62:62:8c),
+- Nodes (chain SP1 -LoRa-> B2 -> B1 -> CP): CP (COM4, MAC 98:c3:77:62:67:24), B1 (COM9, 98:c3:77:63:3A:48), B2 = gateway with LoRa+BLE (COM11, 98:c3:77:62:62:8c),
   SP1 = Feather RP2040 RFM95 (not yet plugged in). Firmware sources: firmware/*/.
 - Physical things (buttons, screens, wiring, soldering) still need the user: ask for a photo.
