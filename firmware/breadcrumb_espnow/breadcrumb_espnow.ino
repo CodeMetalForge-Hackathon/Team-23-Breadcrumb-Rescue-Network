@@ -2,7 +2,8 @@
 // Board: Adafruit Feather ESP32-S3 Reverse TFT (#5691)
 //
 // One sketch for every ESP32 node. Set NODE_ID below (or pass -DNODE_ID=\"B2\" at build time).
-//   "B2" : gateway relay (LoRa receiver + BLE phone listener), "B1": relay
+//   "B2" : gateway relay (LoRa receiver + BLE phone listener)
+//   "B1" : relay + rescue Wi-Fi captive portal "RESCUE-TEAM-NEARBY" (POST /sos -> SOS message)
 //   (flooding with de-dup, hop limit, random delay, heartbeat)
 //   Demo chain with 3 ESP32s: SP1 --LoRa--> B2 --ESP-NOW--> B1 --ESP-NOW--> CP
 //   (old names: B3 -> B2, B2 -> B1)
@@ -41,6 +42,21 @@
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
+#include <DNSServer.h>
+#include <WebServer.h>
+#include "portal_pages.h"
+
+// B1 runs the rescue Wi-Fi captive portal (soft-AP on the ESP-NOW channel): a phone joins
+// RESCUE-TEAM-NEARBY, the form pops up, POST /sos sends {"t":"SOS","msg":...} into the mesh.
+#ifndef HAS_PORTAL
+#define HAS_PORTAL (__builtin_strcmp(NODE_ID, "B1") == 0)
+#endif
+static const char* PORTAL_SSID = "RESCUE-TEAM-NEARBY";
+static const int SOS_MSG_MAX = 100;           // spec: msg at most 100 characters
+static const uint32_t SOS_MIN_GAP_MS = 3000;  // ignore double taps / resubmits
+DNSServer dns;
+WebServer web(80);
+static uint32_t lastSos = 0;
 static const int LORA_CS = 10, LORA_RST = 11, LORA_INT = 9;
 static const float LORA_FREQ = 915.0;
 RH_RF95 rf95(LORA_CS, LORA_INT);
@@ -191,7 +207,7 @@ static void schedule(const char* s) {
 }
 
 // Originate a message from this node (heartbeat, test alert)
-static void originate(JsonDocument& doc) {
+static void originate(JsonDocument& doc, bool resend = false) {
   char id[5];
   randomId(id);
   doc["id"] = id;
@@ -203,7 +219,70 @@ static void originate(JsonDocument& doc) {
   if (n == 0 || n > MSG_MAX) return;
   remember(id);
   if (isCP) Serial.println(buf);
-  else sendRaw(buf, n);
+  else {
+    sendRaw(buf, n);
+    if (resend) schedule(buf);  // same id again 50-300 ms later: a lost frame gets a second chance
+  }
+}
+
+// ---- captive portal (B1) ----
+static void portalRedirect() {
+  web.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
+  web.send(302, "text/plain", "");
+}
+
+// keep printable characters, cut at maxBytes on a UTF-8 boundary
+static String cleanText(const String& in, size_t maxBytes) {
+  String out;
+  for (size_t i = 0; i < in.length(); i++) {
+    uint8_t c = (uint8_t)in[i];
+    if (c < 0x20) c = ' ';
+    else if (c == '"') c = '\'';   // no JSON escaping: keeps the message under 200 bytes
+    else if (c == '\\') c = '/';
+    out += (char)c;
+  }
+  out.trim();
+  if (out.length() > maxBytes) {
+    size_t n = maxBytes;
+    while (n > 0 && ((uint8_t)out[n] & 0xC0) == 0x80) n--;  // don't split a multi-byte char
+    out = out.substring(0, n);
+  }
+  return out;
+}
+
+static void handleSos() {
+  uint32_t now = millis();
+  if (now - lastSos < SOS_MIN_GAP_MS && lastSos != 0) { web.send_P(200, "text/html", PAGE_SENT); return; }
+  lastSos = now;
+  int people = constrain(web.arg("p").toInt(), 1, 99);
+  bool injured = web.arg("inj") == "yes";
+  String text = cleanText(web.arg("msg"), 70);
+  String msg = String(people) + (people == 1 ? " person" : " ppl") + ", injured: " + (injured ? "yes" : "no");
+  if (text.length()) msg += ". " + text;
+  msg = cleanText(msg, SOS_MSG_MAX);
+
+  JsonDocument doc;
+  doc["t"] = "SOS";
+  doc["z"] = NODE_ID;
+  doc["msg"] = msg;
+  doc["p"] = people;
+  doc["inj"] = injured ? 1 : 0;
+  originate(doc, true);
+  strncpy(lastType, "SOS", sizeof(lastType) - 1);
+  strncpy(lastFrom, "web", sizeof(lastFrom) - 1);
+  screenDirty = true;
+  Serial.printf("# sos %s\n", msg.c_str());
+  web.send_P(200, "text/html", PAGE_SENT);
+}
+
+static void portalBegin() {
+  dns.setErrorReplyCode(DNSReplyCode::NoError);
+  dns.start(53, "*", WiFi.softAPIP());
+  web.on("/", HTTP_GET, []() { web.send_P(200, "text/html", PAGE_FORM); });
+  web.on("/sos", HTTP_POST, handleSos);
+  web.onNotFound(portalRedirect);  // /generate_204, /hotspot-detect.html, /connecttest.txt, ...
+  web.begin();
+  Serial.printf("# portal %s on %s\n", PORTAL_SSID, WiFi.softAPIP().toString().c_str());
 }
 
 static void handlePacket(const Packet& pk) {
@@ -265,6 +344,11 @@ static void drawScreen() {
   tft.printf("%s<%s", lastType, lastFrom);
   tft.setCursor(4, 112);
   if (lastRssi) tft.printf("RSSI %d dBm", lastRssi);
+  if (HAS_PORTAL) {
+    tft.setCursor(170, 112);
+    tft.setTextColor(ST77XX_ORANGE);
+    tft.printf("AP %d", WiFi.softAPgetStationNum());
+  }
   if (HAS_LORA) {
     tft.setCursor(170, 112);
     tft.setTextColor(loraOk ? ST77XX_GREEN : ST77XX_RED);
@@ -293,7 +377,12 @@ void setup() {
   pinMode(0, INPUT_PULLUP);    // D0: active low
   pinMode(1, INPUT_PULLDOWN);  // D1: active high
 
-  WiFi.mode(WIFI_STA);
+  if (HAS_PORTAL) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(PORTAL_SSID, nullptr, WIFI_CHANNEL);  // open network, same channel as ESP-NOW
+  } else {
+    WiFi.mode(WIFI_STA);
+  }
   WiFi.disconnect();
   esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
   if (esp_now_init() != ESP_OK) {
@@ -328,6 +417,8 @@ void setup() {
     bleScan->setWindow(48);     // 30 ms: leave airtime for ESP-NOW
   }
 
+  if (HAS_PORTAL) portalBegin();
+
   randomSeed(esp_random());
   lastHeartbeat = millis() - HEARTBEAT_MS + random(1000, 4000);  // first HB soon, nodes staggered
   drawScreen();
@@ -336,6 +427,10 @@ void setup() {
 }
 
 void loop() {
+  if (HAS_PORTAL) {
+    dns.processNextRequest();
+    web.handleClient();
+  }
   // 1. drain received packets
   while (true) {
     Packet pk;
@@ -430,6 +525,11 @@ void loop() {
   }
 
   // 5. screen
+  if (HAS_PORTAL) {  // show how many phones are on the rescue Wi-Fi
+    static int lastSta = -1;
+    int sta = WiFi.softAPgetStationNum();
+    if (sta != lastSta) { lastSta = sta; screenDirty = true; }
+  }
   static uint32_t lastDraw = 0;
   if (screenDirty && now - lastDraw > 250) {
     lastDraw = now;
