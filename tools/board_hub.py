@@ -168,7 +168,8 @@ class Hub:
 
     # ---- flashing ----
     def run(self, cmd, timeout=180):
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return r.returncode, (r.stdout + r.stderr)[-4000:]
 
     def wait_port(self, pred, timeout):
@@ -320,6 +321,18 @@ def make_handler(hub, token):
             self.reply(404, {"error": "unknown path"})
 
         def do_POST(self):
+            try:
+                self._post()
+            except Exception:
+                import traceback
+                tb = traceback.format_exc()
+                print(tb, flush=True)
+                try:
+                    self.reply(500, {"ok": False, "output": tb})
+                except Exception:
+                    pass
+
+        def _post(self):
             q = self.check()
             if q is None:
                 return
@@ -378,6 +391,9 @@ def main():
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--esptool", default=None)
     a = ap.parse_args()
+    if sys.stdout is None or sys.stderr is None:  # pythonw: no console, log to a file instead
+        f = open(os.path.join(HERE, "board_hub.out"), "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = f
     hub = Hub(a.esptool or find_esptool())
     threading.Thread(target=hub.scan_forever, daemon=True).start()
     print(f"board hub on {a.bind}:{a.port}, esptool={hub.esptool}", flush=True)

@@ -2,11 +2,14 @@
 // Board: Adafruit Feather ESP32-S3 Reverse TFT (#5691)
 //
 // One sketch for every ESP32 node. Set NODE_ID below (or pass -DNODE_ID=\"B2\" at build time).
-//   "B3", "B2", "B1" : relay (flooding with de-dup, hop limit, random delay, heartbeat)
+//   "B2" : gateway relay (LoRa receiver + BLE phone listener), "B1": relay
+//   (flooding with de-dup, hop limit, random delay, heartbeat)
+//   Demo chain with 3 ESP32s: SP1 --LoRa--> B2 --ESP-NOW--> B1 --ESP-NOW--> CP
+//   (old names: B3 -> B2, B2 -> B1)
 //   "CP"             : command post, also prints every new message to USB serial as one JSON line
 //
 // Message format (Shivansh's plan, short-key JSON, < 250 bytes for ESP-NOW):
-//   {"id":"a3f1","src":"SP1","ttl":4,"rt":["B3","B2"],"t":"PERSON","c":88,"th":1,"z":"B3"}
+//   {"id":"a3f1","src":"SP1","ttl":4,"rt":["B2","B1"],"t":"PERSON","c":88,"th":1,"z":"B2"}
 // Each relay appends its own ID to "rt" and adds "q": RSSI (dBm) of the hop it heard.
 //
 // Buttons: D0 (active low) sends a TEST PERSON alert from this node.
@@ -23,13 +26,13 @@
 #define NODE_ID "B2"
 #endif
 
-// B3 is the gateway: LoRa receiver (RFM95W breakout) + BLE phone listener, on by default for B3.
+// B2 is the gateway: LoRa receiver (RFM95W breakout) + BLE phone listener, on by default for B2.
 // Wiring RFM95W -> Feather: VIN-3V, GND-GND, SCK-SCK, MISO-MI, MOSI-MO, CS-D10, RST-D11, G0-D9
 #ifndef HAS_LORA
-#define HAS_LORA (__builtin_strcmp(NODE_ID, "B3") == 0)
+#define HAS_LORA (__builtin_strcmp(NODE_ID, "B2") == 0)
 #endif
 #ifndef HAS_BLE
-#define HAS_BLE (__builtin_strcmp(NODE_ID, "B3") == 0)
+#define HAS_BLE (__builtin_strcmp(NODE_ID, "B2") == 0)
 #endif
 #include <SPI.h>
 #include <RH_RF95.h>
@@ -41,14 +44,13 @@ static const float LORA_FREQ = 915.0;
 RH_RF95 rf95(LORA_CS, LORA_INT);
 static bool loraOk = false;
 
-// ---- demo topology: which neighbour each node accepts from (chain SP1 -> B3 -> B2 -> B1 -> CP) ----
+// ---- demo topology: which neighbour each node accepts from (chain SP1 -> B2 -> B1 -> CP) ----
 // Upstream = farther from the command post. Downstream messages (ACK) are not used yet.
 struct Link { const char* node; const char* acceptFrom[3]; };
 static const Link TOPOLOGY[] = {
-  {"B3", {"SP1", "GW", nullptr}},
-  {"B2", {"B3", nullptr, nullptr}},
+  {"B2", {"SP1", "GW", nullptr}},
   {"B1", {"B2", nullptr, nullptr}},
-  {"CP", {"B1", "B2", nullptr}},  // B2 also accepted so the demo still works with only 3 ESP32s
+  {"CP", {"B1", nullptr, nullptr}},
 };
 
 static const uint8_t WIFI_CHANNEL = 1;
@@ -86,7 +88,7 @@ static bool screenDirty = true;
 
 // ---- BLE phone listener: count nearby phones (Apple / Google / Samsung / Microsoft adverts) ----
 static const uint32_t BLE_REPORT_MS = 20000;
-static const int BLE_MAX = 32;
+static const int BLE_MAX = 128;
 static const int BLE_MIN_RSSI = -90;
 static uint32_t bleSeen[BLE_MAX];
 static int bleCount = 0, bleBest = -127;

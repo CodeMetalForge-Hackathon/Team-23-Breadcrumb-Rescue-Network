@@ -1,14 +1,14 @@
 // Breadcrumb Rescue Network: LoRa bridge for the spotter (SP1)
 // Board: Adafruit Feather RP2040 RFM95 (#5714), 915 MHz. SOLDER THE ANTENNA BEFORE RUNNING.
 //
-// Pi5 (spotter) --USB serial, one JSON line per message--> this board --LoRa--> B3 gateway
+// Pi5 (spotter) --USB serial, one JSON line per message--> this board --LoRa--> B2 gateway
 //
-// Serial in  : a JSON line, e.g. {"t":"PERSON","c":88,"th":1,"z":"B3"}
+// Serial in  : a JSON line, e.g. {"t":"PERSON","c":88,"th":1,"z":"B2"}
 //              Missing "id"/"src"/"ttl"/"rt" are filled in (src = SP1). Max 250 bytes.
 //              The plain line "test" sends a test PERSON alert.
 // Serial out : {"sent":"<id>"} after each send, {"lora_rx":<json>,"rssi":-57} for anything heard
 //              (ACKs coming back later), {"err":"..."} on bad input.
-// Without a Pi: sends a HB every 15 s so B3 can show the LoRa link is alive.
+// Without a Pi: sends a HB every 15 s so B2 can show the LoRa link is alive.
 
 #include <SPI.h>
 #include <RH_RF95.h>
@@ -60,7 +60,7 @@ static void handleLine(char* s) {
   if (!*s) return;
   JsonDocument doc;
   if (strcmp(s, "test") == 0) {
-    doc["t"] = "PERSON"; doc["c"] = 88; doc["th"] = 1; doc["z"] = "B3";
+    doc["t"] = "PERSON"; doc["c"] = 88; doc["th"] = 1; doc["z"] = "B2";
   } else if (deserializeJson(doc, s)) {
     Serial.println("{\"err\":\"bad json\"}");
     return;
