@@ -23,6 +23,24 @@
 #define NODE_ID "B2"
 #endif
 
+// B3 is the gateway: LoRa receiver (RFM95W breakout) + BLE phone listener, on by default for B3.
+// Wiring RFM95W -> Feather: VIN-3V, GND-GND, SCK-SCK, MISO-MI, MOSI-MO, CS-D10, RST-D11, G0-D9
+#ifndef HAS_LORA
+#define HAS_LORA (__builtin_strcmp(NODE_ID, "B3") == 0)
+#endif
+#ifndef HAS_BLE
+#define HAS_BLE (__builtin_strcmp(NODE_ID, "B3") == 0)
+#endif
+#include <SPI.h>
+#include <RH_RF95.h>
+#include <BLEDevice.h>
+#include <BLEScan.h>
+#include <BLEAdvertisedDevice.h>
+static const int LORA_CS = 10, LORA_RST = 11, LORA_INT = 9;
+static const float LORA_FREQ = 915.0;
+RH_RF95 rf95(LORA_CS, LORA_INT);
+static bool loraOk = false;
+
 // ---- demo topology: which neighbour each node accepts from (chain SP1 -> B3 -> B2 -> B1 -> CP) ----
 // Upstream = farther from the command post. Downstream messages (ACK) are not used yet.
 struct Link { const char* node; const char* acceptFrom[3]; };
@@ -65,6 +83,35 @@ static uint32_t cntRx = 0, cntFwd = 0, cntDup = 0, cntDrop = 0;
 static char lastType[10] = "-", lastFrom[8] = "-";
 static int lastRssi = 0;
 static bool screenDirty = true;
+
+// ---- BLE phone listener: count nearby phones (Apple / Google / Samsung / Microsoft adverts) ----
+static const uint32_t BLE_REPORT_MS = 20000;
+static const int BLE_MAX = 32;
+static const int BLE_MIN_RSSI = -90;
+static uint32_t bleSeen[BLE_MAX];
+static int bleCount = 0, bleBest = -127;
+static portMUX_TYPE bleMux = portMUX_INITIALIZER_UNLOCKED;
+static BLEScan* bleScan = nullptr;
+
+class PhoneCb : public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice dev) override {
+    int rssi = dev.getRSSI();
+    if (rssi < BLE_MIN_RSSI || !dev.haveManufacturerData()) return;
+    String m = dev.getManufacturerData();
+    if (m.length() < 2) return;
+    uint16_t company = (uint8_t)m[0] | ((uint8_t)m[1] << 8);
+    // 0x004C Apple, 0x00E0 Google, 0x0075 Samsung, 0x0006 Microsoft
+    if (company != 0x004C && company != 0x00E0 && company != 0x0075 && company != 0x0006) return;
+    const uint8_t* a = (const uint8_t*)dev.getAddress().getNative();
+    uint32_t h = ((uint32_t)a[2] << 24) | ((uint32_t)a[3] << 16) | ((uint32_t)a[4] << 8) | a[5];
+    portENTER_CRITICAL(&bleMux);
+    bool found = false;
+    for (int i = 0; i < bleCount; i++) if (bleSeen[i] == h) { found = true; break; }
+    if (!found && bleCount < BLE_MAX) bleSeen[bleCount++] = h;
+    if (rssi > bleBest) bleBest = rssi;
+    portEXIT_CRITICAL(&bleMux);
+  }
+};
 
 // ---------------------------------------------------------------------------
 static void randomId(char* out) {
@@ -210,6 +257,11 @@ static void drawScreen() {
   tft.printf("%s<%s", lastType, lastFrom);
   tft.setCursor(4, 112);
   if (lastRssi) tft.printf("RSSI %d dBm", lastRssi);
+  if (HAS_LORA) {
+    tft.setCursor(170, 112);
+    tft.setTextColor(loraOk ? ST77XX_GREEN : ST77XX_RED);
+    tft.print(loraOk ? "LoRa" : "noLR");
+  }
   screenDirty = false;
 }
 
@@ -252,6 +304,22 @@ void setup() {
   peer.encrypt = false;
   esp_now_add_peer(&peer);
 
+  if (HAS_LORA) {
+    pinMode(LORA_RST, OUTPUT);
+    digitalWrite(LORA_RST, LOW);  delay(10);
+    digitalWrite(LORA_RST, HIGH); delay(10);
+    loraOk = rf95.init() && rf95.setFrequency(LORA_FREQ);
+    Serial.printf("{\"lora\":%s}\n", loraOk ? "true" : "false");
+  }
+  if (HAS_BLE) {
+    BLEDevice::init("");
+    bleScan = BLEDevice::getScan();
+    bleScan->setAdvertisedDeviceCallbacks(new PhoneCb(), true);
+    bleScan->setActiveScan(false);
+    bleScan->setInterval(160);  // 100 ms
+    bleScan->setWindow(48);     // 30 ms: leave airtime for ESP-NOW
+  }
+
   randomSeed(esp_random());
   lastHeartbeat = millis() - HEARTBEAT_MS + random(1000, 4000);  // first HB soon, nodes staggered
   drawScreen();
@@ -274,8 +342,45 @@ void loop() {
     handlePacket(pk);
   }
 
+  // 1b. LoRa packets from the spotter go through the same relay logic
+  if (loraOk && rf95.available()) {
+    Packet pk;
+    uint8_t len = MAX_LEN;
+    if (rf95.recv((uint8_t*)pk.data, &len)) {
+      pk.data[len] = 0;
+      pk.len = len;
+      pk.rssi = rf95.lastRssi();
+      handlePacket(pk);
+    }
+  }
+
   // 2. send due re-broadcasts
   uint32_t now = millis();
+
+  // 2b. BLE: scan continuously in 5 s bursts, report a PHONE message every 20 s
+  if (bleScan) {
+    if (!bleScan->isScanning()) {
+      bleScan->clearResults();
+      bleScan->start(5, nullptr, false);
+    }
+    static uint32_t lastBle = 0;
+    if (now - lastBle >= BLE_REPORT_MS) {
+      lastBle = now;
+      int n, best;
+      portENTER_CRITICAL(&bleMux);
+      n = bleCount; best = bleBest;
+      bleCount = 0; bleBest = -127;
+      portEXIT_CRITICAL(&bleMux);
+      if (n > 0) {
+        JsonDocument ph;
+        ph["t"] = "PHONE";
+        ph["n"] = n;
+        ph["rssi"] = best;
+        ph["z"] = NODE_ID;
+        originate(ph);
+      }
+    }
+  }
   for (Pending& p : pending) {
     if (p.used && (int32_t)(now - p.due) >= 0) {
       sendRaw(p.data, strlen(p.data));
