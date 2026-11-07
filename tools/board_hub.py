@@ -192,8 +192,32 @@ class Hub:
         p = self.wait_port(lambda p: p.vid == 0x303A and p.pid == ESP_ROM_PID and norm_key(p.serial_number) == key, 3)
         if p:
             rc, out = self.run([self.esptool, "--chip", "esp32s3", "--port", p.device,
-                                "--before", "no_reset", "--after", "hard_reset", "read_mac"], 60)
+                                "--before", "no-reset", "--after", "hard-reset", "read-mac"], 60)
             log.append(f"[hub] board was in ROM mode on {p.device}; hard reset rc={rc}")
+
+    def enter_rom(self, b, log):
+        """Put an ESP32-S3 running TinyUSB CDC into ROM download mode; return the new ROM port or None.
+        The chip re-enumerates (new COM number), so esptool must be pointed at the new port."""
+        key = b.key
+        try:
+            s = serial.Serial(b.dev, 1200)   # 1200-baud touch -> download mode (Arduino ESP32 TinyUSB)
+            s.dtr = False
+            s.close()
+        except Exception as e:
+            log.append(f"[hub] 1200-baud touch on {b.dev}: {e}")
+        p = self.wait_port(lambda p: p.vid == 0x303A and p.pid == ESP_ROM_PID and norm_key(p.serial_number) == key, 8)
+        if p:
+            log.append(f"[hub] download mode on {p.device}")
+            return p.device
+        # second try: esptool's own DTR/RTS reset on the app port (it will error when the port vanishes)
+        rc, out = self.run([self.esptool, "--chip", "esp32s3", "--port", b.dev, "--before", "default-reset",
+                            "--after", "no-reset", "chip-id"], 30)
+        p = self.wait_port(lambda p: p.vid == 0x303A and p.pid == ESP_ROM_PID and norm_key(p.serial_number) == key, 8)
+        if p:
+            log.append(f"[hub] download mode on {p.device} (esptool reset)")
+            return p.device
+        log.append("[hub] board did not enter download mode (try: hold BOOT/D0, tap RESET)")
+        return None
 
     def flash_esp(self, b, data):
         log = []
@@ -201,12 +225,19 @@ class Hub:
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
             f.write(data)
             path = f.name
+        rc = 1
         try:
             self.detach(b)
-            rc, out = self.run([self.esptool, "--chip", "esp32s3", "--port", b.dev, "--baud", "921600",
-                                "--before", "default_reset", "--after", "hard_reset",
-                                "write_flash", "-z", "0x0", path])
-            log.append(out)
+            rom = self.enter_rom(b, log)
+            if rom:
+                with self.lock:
+                    self.flashing.add(rom)
+                rc, out = self.run([self.esptool, "--chip", "esp32s3", "--port", rom, "--baud", "921600",
+                                    "--before", "no-reset", "--after", "hard-reset",
+                                    "write-flash", "-z", "0x0", path])
+                log.append(out)
+                with self.lock:
+                    self.flashing.discard(rom)
             self.kick_rom(key, log)
         finally:
             os.unlink(path)
@@ -222,7 +253,7 @@ class Hub:
         try:
             self.detach(b)
             rc, out = self.run([self.esptool, "--chip", "esp32s3", "--port", b.dev,
-                                "--after", "hard_reset", "read_mac"], 60)
+                                "--after", "hard-reset", "read-mac"], 60)
             log.append(out)
             self.kick_rom(key, log)
         finally:
