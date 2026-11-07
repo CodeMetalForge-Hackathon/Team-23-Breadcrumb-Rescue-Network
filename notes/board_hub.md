@@ -11,6 +11,7 @@ On jump, any agent (Claude, Codex, Kiro) uses the `hub` command (~/.local/bin/hu
     hub deploy B3           # compile firmware/breadcrumb_espnow for B3 on jump and flash it
     hub deploy SP1          # compile + flash the RP2040 LoRa bridge
     hub reset B2
+    hub update              # push tools/board_hub.py to the laptop (remote update; keep admin_update in it)
 
 Rules for agents
 - One flash at a time (the hub serializes); tell the others in tmux before reflashing a node.

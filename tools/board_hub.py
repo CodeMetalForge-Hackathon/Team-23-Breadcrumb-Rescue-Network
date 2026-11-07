@@ -369,6 +369,29 @@ def make_handler(hub, token):
                 except Exception:
                     pass
 
+        def admin_update(self, q, data):
+            """POST /admin/update?sha=<sha256 of body>: replace board_hub.py and restart the hub.
+            Remote code execution for anyone with the token -- enabled by the laptop owner on purpose."""
+            import hashlib, py_compile
+            want = (q.get("sha", [""])[0] or "").lower()
+            got = hashlib.sha256(data).hexdigest()
+            if not data or want != got:
+                return self.reply(400, {"ok": False, "error": "sha mismatch", "got": got})
+            me = os.path.abspath(__file__)
+            new = me + ".new"
+            with open(new, "wb") as f:
+                f.write(data)
+            try:
+                py_compile.compile(new, doraise=True)
+            except py_compile.PyCompileError as e:
+                os.unlink(new)
+                return self.reply(400, {"ok": False, "error": "does not compile", "output": str(e)})
+            shutil.copy2(me, me + ".bak")      # previous version kept for rollback
+            os.replace(new, me)
+            self.reply(200, {"ok": True, "sha": got, "restarting": True})
+            # restart_hub.ps1 runs the hub in a loop, so exiting is enough to load the new code
+            threading.Timer(1.0, os._exit, [0]).start()
+
         def _post(self):
             q = self.check()
             if q is None:
@@ -382,6 +405,8 @@ def make_handler(hub, token):
                     return self.reply(400, {"error": "need existing port and name"})
                 hub.set_label(b.key or b.dev, name)
                 return self.reply(200, {"ok": True, "port": b.dev, "label": name})
+            if parts == ["admin", "update"]:
+                return self.admin_update(q, data)
             if len(parts) != 2:
                 return self.reply(404, {"error": "unknown path"})
             b = hub.find(parts[1])

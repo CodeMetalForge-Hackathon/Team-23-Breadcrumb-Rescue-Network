@@ -7,7 +7,9 @@
 #   hub flash B3 file.bin      flash ESP32 merged .bin (or .uf2 for RP2040)
 #   hub deploy B3|B2|CP|SP1    compile on jump from firmware/ and flash that node
 #   hub reset B2               reset an ESP32
-#   hub label COM11 B3         name a port by hand
+#   hub label COM11 B2         name a port by hand
+#   hub update                 push tools/board_hub.py to the laptop (hub restarts in ~3 s)
+#                              KEEP admin_update in board_hub.py or this endpoint disappears
 set -euo pipefail
 HUB=${BOARD_HUB:-http://100.115.103.120:8765}
 TOKEN=${BOARD_HUB_TOKEN:-$(cat ~/.config/board_hub_token)}
@@ -32,6 +34,10 @@ case $cmd in
           c -X POST -H "Content-Type: application/octet-stream" --data-binary @"$2" --max-time 300 "$HUB/flash/$1?kind=$kind" | pp ;;
   reset)  c -X POST "$HUB/reset/$1" --max-time 120 | pp ;;
   label)  c -X POST "$HUB/label?port=$1&name=$2" | pp ;;
+  update) f="$ROOT/tools/board_hub.py"; grep -q "def admin_update" "$f" || { echo "refusing: admin_update missing"; exit 1; }
+          python3 -m py_compile "$f"; sha=$(sha256sum "$f" | cut -d" " -f1)
+          c -X POST -H "Content-Type: application/octet-stream" --data-binary @"$f" "$HUB/admin/update?sha=$sha" | pp
+          sleep 5; c "$HUB/boards" >/dev/null && echo "hub back up" ;;
   deploy) node=$1
           if [[ $node == SP1 ]]; then
             arduino-cli compile --fqbn rp2040:rp2040:adafruit_feather_rfm --build-path "$ROOT/firmware/lora_bridge/build" "$ROOT/firmware/lora_bridge" | tail -2
@@ -42,5 +48,5 @@ case $cmd in
               --build-property "compiler.cpp.extra_flags=-DNODE_ID=\"$node\"" --build-path "$b" "$ROOT/firmware/breadcrumb_espnow" | tail -2
             "$0" flash "$node" "$b/breadcrumb_espnow.ino.merged.bin"
           fi ;;
-  *) sed -n '2,11p' "$0"; exit 1 ;;
+  *) sed -n '2,13p' "$0"; exit 1 ;;
 esac
