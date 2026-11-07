@@ -1,1 +1,4 @@
 firmware/*/build/
+tools/board_hub_labels.json
+tools/board_hub_logs/
+tools/__pycache__/
