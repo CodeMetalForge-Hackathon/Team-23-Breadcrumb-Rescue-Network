@@ -18,7 +18,7 @@
 #define LORA_FREQ 915.0
 #endif
 #ifndef LORA_TX_DBM
-#define LORA_TX_DBM 13  // 5..23; 13 is plenty indoors
+#define LORA_TX_DBM 5   // spec: minimum power for the one-room demo (RFM95 PA_BOOST range 5..20)
 #endif
 
 static const char* SRC = "SP1";

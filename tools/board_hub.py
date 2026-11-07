@@ -92,9 +92,10 @@ class Hub:
 
     # ---- serial readers ----
     def on_line(self, b, text):
-        if text.startswith('{"boot"'):
+        bt = text[2:] if text.startswith("# {") else text   # BASE prefixes debug lines with '#'
+        if bt.startswith('{"boot"'):
             try:
-                j = json.loads(text)
+                j = json.loads(bt)
                 name = j.get("boot")
                 if name:
                     self.set_label(b.key, name)
@@ -274,10 +275,18 @@ class Hub:
             key = b.key
             self.detach(b)
             try:
-                s = serial.Serial(b.dev, 1200)   # 1200-baud touch -> UF2 bootloader
-                s.close()
-            except Exception as e:
-                log.append(f"[hub] 1200-baud touch: {e}")
+                for attempt in range(6):          # 1200-baud touch -> UF2 bootloader (Windows may need retries)
+                    try:
+                        s = serial.Serial()
+                        s.port, s.baudrate, s.dtr = b.dev, 1200, True
+                        s.open()
+                        time.sleep(0.1)
+                        s.dtr = False
+                        s.close()
+                        break
+                    except Exception as e:
+                        log.append(f"[hub] 1200-baud touch try {attempt + 1}: {e}")
+                        time.sleep(0.7)
             finally:
                 with self.lock:
                     self.flashing.discard(b.dev)

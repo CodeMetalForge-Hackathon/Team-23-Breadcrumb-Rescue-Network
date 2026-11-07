@@ -6,7 +6,9 @@
 //   (flooding with de-dup, hop limit, random delay, heartbeat)
 //   Demo chain with 3 ESP32s: SP1 --LoRa--> B2 --ESP-NOW--> B1 --ESP-NOW--> CP
 //   (old names: B3 -> B2, B2 -> B1)
-//   "CP"             : command post, also prints every new message to USB serial as one JSON line
+//   "BASE"           : base station at the dashboard laptop; prints every new message to USB serial as one
+//                      JSON line (plus its own HB every 15 s). Debug lines on BASE start with '#'.
+// Contract: Shivansh's FIRMWARE_SPEC.md (messages < 200 bytes, unknown fields forwarded unchanged).
 //
 // Message format (Shivansh's plan, short-key JSON, < 250 bytes for ESP-NOW):
 //   {"id":"a3f1","src":"SP1","ttl":4,"rt":["B2","B1"],"t":"PERSON","c":88,"th":1,"z":"B2"}
@@ -50,7 +52,7 @@ struct Link { const char* node; const char* acceptFrom[3]; };
 static const Link TOPOLOGY[] = {
   {"B2", {"SP1", "GW", nullptr}},
   {"B1", {"B2", nullptr, nullptr}},
-  {"CP", {"B1", nullptr, nullptr}},
+  {"BASE", {"B1", nullptr, nullptr}},
 };
 
 static const uint8_t WIFI_CHANNEL = 1;
@@ -59,7 +61,8 @@ static const uint32_t HEARTBEAT_MS = 15000;
 static const uint32_t DELAY_MIN_MS = 50, DELAY_MAX_MS = 300;
 static const int SEEN_SIZE = 50;
 static const int QUEUE_SIZE = 16;
-static const int MAX_LEN = 250;
+static const int MAX_LEN = 250;      // ESP-NOW frame limit (receive buffer)
+static const int MSG_MAX = 199;      // contract: every message < 200 bytes
 
 static const uint8_t BROADCAST[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -86,30 +89,33 @@ static char lastType[10] = "-", lastFrom[8] = "-";
 static int lastRssi = 0;
 static bool screenDirty = true;
 
-// ---- BLE phone listener: count nearby phones (Apple / Google / Samsung / Microsoft adverts) ----
-static const uint32_t BLE_REPORT_MS = 20000;
+// ---- BLE phone listener: unique addresses above an RSSI threshold, strongest RSSI, Apple count ----
+// Spec says RSSI > -90; a crowded venue saturates that, so -75 (~a few metres) by default.
+static const uint32_t BLE_REPORT_MS = 10000;
 static const int BLE_MAX = 128;
-static const int BLE_MIN_RSSI = -90;
+#ifndef BLE_MIN_RSSI
+#define BLE_MIN_RSSI -75
+#endif
 static uint32_t bleSeen[BLE_MAX];
-static int bleCount = 0, bleBest = -127;
+static int bleCount = 0, bleApple = 0, bleBest = -127;
 static portMUX_TYPE bleMux = portMUX_INITIALIZER_UNLOCKED;
 static BLEScan* bleScan = nullptr;
 
 class PhoneCb : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice dev) override {
     int rssi = dev.getRSSI();
-    if (rssi < BLE_MIN_RSSI || !dev.haveManufacturerData()) return;
-    String m = dev.getManufacturerData();
-    if (m.length() < 2) return;
-    uint16_t company = (uint8_t)m[0] | ((uint8_t)m[1] << 8);
-    // 0x004C Apple, 0x00E0 Google, 0x0075 Samsung, 0x0006 Microsoft
-    if (company != 0x004C && company != 0x00E0 && company != 0x0075 && company != 0x0006) return;
+    if (rssi <= BLE_MIN_RSSI) return;
+    bool apple = false;
+    if (dev.haveManufacturerData()) {
+      String m = dev.getManufacturerData();
+      apple = m.length() >= 2 && (uint8_t)m[0] == 0x4C && (uint8_t)m[1] == 0x00;  // company 0x004C
+    }
     const uint8_t* a = (const uint8_t*)dev.getAddress().getNative();
     uint32_t h = ((uint32_t)a[2] << 24) | ((uint32_t)a[3] << 16) | ((uint32_t)a[4] << 8) | a[5];
     portENTER_CRITICAL(&bleMux);
     bool found = false;
     for (int i = 0; i < bleCount; i++) if (bleSeen[i] == h) { found = true; break; }
-    if (!found && bleCount < BLE_MAX) bleSeen[bleCount++] = h;
+    if (!found && bleCount < BLE_MAX) { bleSeen[bleCount++] = h; if (apple) bleApple++; }
     if (rssi > bleBest) bleBest = rssi;
     portEXIT_CRITICAL(&bleMux);
   }
@@ -194,7 +200,7 @@ static void originate(JsonDocument& doc) {
   doc["rt"].to<JsonArray>();
   char buf[MAX_LEN + 1];
   size_t n = serializeJson(doc, buf, sizeof(buf));
-  if (n == 0 || n > MAX_LEN) return;
+  if (n == 0 || n > MSG_MAX) return;
   remember(id);
   if (isCP) Serial.println(buf);
   else sendRaw(buf, n);
@@ -236,7 +242,7 @@ static void handlePacket(const Packet& pk) {
 
   char buf[MAX_LEN + 1];
   size_t n = serializeJson(doc, buf, sizeof(buf));
-  if (n == 0 || n > MAX_LEN) { cntDrop++; return; }
+  if (n == 0 || n > MSG_MAX) { cntDrop++; return; }
   schedule(buf);
 }
 
@@ -270,7 +276,7 @@ static void drawScreen() {
 // ---------------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
-  isCP = strcmp(NODE_ID, "CP") == 0;
+  isCP = strcmp(NODE_ID, "BASE") == 0;
 
 #ifdef TFT_I2C_POWER
   pinMode(TFT_I2C_POWER, OUTPUT);
@@ -311,7 +317,7 @@ void setup() {
     digitalWrite(LORA_RST, LOW);  delay(10);
     digitalWrite(LORA_RST, HIGH); delay(10);
     loraOk = rf95.init() && rf95.setFrequency(LORA_FREQ);
-    Serial.printf("{\"lora\":%s}\n", loraOk ? "true" : "false");
+    Serial.printf("# lora %s\n", loraOk ? "ok" : "FAILED");
   }
   if (HAS_BLE) {
     BLEDevice::init("");
@@ -325,7 +331,8 @@ void setup() {
   randomSeed(esp_random());
   lastHeartbeat = millis() - HEARTBEAT_MS + random(1000, 4000);  // first HB soon, nodes staggered
   drawScreen();
-  Serial.printf("{\"boot\":\"%s\",\"mac\":\"%s\"}\n", NODE_ID, WiFi.macAddress().c_str());
+  // '#' = debug line, ignored by the dashboard; the board hub learns the node name from it
+  Serial.printf("# {\"boot\":\"%s\",\"mac\":\"%s\"}\n", NODE_ID, WiFi.macAddress().c_str());
 }
 
 void loop() {
@@ -368,16 +375,17 @@ void loop() {
     static uint32_t lastBle = 0;
     if (now - lastBle >= BLE_REPORT_MS) {
       lastBle = now;
-      int n, best;
+      int n, best, ap;
       portENTER_CRITICAL(&bleMux);
-      n = bleCount; best = bleBest;
-      bleCount = 0; bleBest = -127;
+      n = bleCount; best = bleBest; ap = bleApple;
+      bleCount = 0; bleApple = 0; bleBest = -127;
       portEXIT_CRITICAL(&bleMux);
       if (n > 0) {
         JsonDocument ph;
         ph["t"] = "PHONE";
         ph["n"] = n;
         ph["rssi"] = best;
+        ph["ap"] = ap;
         ph["z"] = NODE_ID;
         originate(ph);
       }
@@ -393,7 +401,7 @@ void loop() {
   }
 
   // 3. heartbeat
-  if (!isCP && now - lastHeartbeat >= HEARTBEAT_MS) {
+  if (now - lastHeartbeat >= HEARTBEAT_MS) {  // BASE: printed to serial only (originate)
     lastHeartbeat = now;
     JsonDocument hb;
     hb["t"] = "HB";
