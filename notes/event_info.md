@@ -16,3 +16,6 @@
 - 奖金: $10k / $5k / $3k; 获胜队的大学生可获得 Code Metal 实习面试
 - 提交: 每队一个 repo, 放在 github.com/CodeMetalForge-Hackathon org 下, repo 即提交物, 要经常 push
 - Discord: discord.com/invite/codemetalforge-hackathon
+
+## 现场硬件 (拍到的)
+- Raspberry Pi 5 + Raspberry Pi AI HAT+ (Hailo-8, 26 TOPS), 装在带 Pi-Camera 开口的外壳里, 见 photos/2026-11-07_hw_rpi5_ai_hat_plus_26tops.jpg
