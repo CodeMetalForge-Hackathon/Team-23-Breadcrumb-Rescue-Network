@@ -286,19 +286,34 @@ static void handleSos() {
   uint32_t now = millis();
   if (now - lastSos < SOS_MIN_GAP_MS && lastSos != 0) { portalRedirect(); return; }
   lastSos = now;
-  int people = constrain(web.arg("p").toInt(), 1, 99);
-  bool injured = web.arg("inj") == "yes";
-  String text = cleanText(web.arg("msg"), 70);
-  String msg = String(people) + (people == 1 ? " person" : " ppl") + ", injured: " + (injured ? "yes" : "no");
-  if (text.length()) msg += ". " + text;
+  // Tap answers (all optional) -> one short readable line for the dashboard, msg <= 100 bytes.
+  int people = constrain(web.arg("p").toInt(), 0, 4);   // 0 = not answered, 4 = "4 or more"
+  int inj = web.hasArg("inj") ? constrain(web.arg("inj").toInt(), 0, 2) : -1;
+  String urgent, hazard;
+  for (int i = 0; i < web.args(); i++) {
+    String k = web.argName(i), v = cleanText(web.arg(i), 12);
+    if (k == "u") urgent += (urgent.length() ? "," : "") + v;
+    else if (k == "h") hazard += (hazard.length() ? "," : "") + v;
+  }
+  String where = cleanText(web.arg("msg"), 40);
+  String msg;
+  if (people) msg += people == 1 ? "1 person" : (people == 4 ? "4+ ppl" : String(people) + " ppl");
+  if (inj == 0) msg += String(msg.length() ? ", " : "") + "no injuries";
+  if (inj == 1) msg += String(msg.length() ? ", " : "") + "injured, can move";
+  if (inj == 2) msg += String(msg.length() ? ", " : "") + "TRAPPED";
+  // location before the lists: if everything is ticked, the 100-byte cut drops trailing hazards, not "where"
+  if (where.length()) msg += String(msg.length() ? ". " : "") + "At: " + where;
+  if (urgent.length()) msg += String(msg.length() ? ". " : "") + "URGENT: " + urgent;
+  if (hazard.length()) msg += String(msg.length() ? ". " : "") + "Danger: " + hazard;
+  if (!msg.length()) msg = "SOS, no details";
   msg = cleanText(msg, SOS_MSG_MAX);
 
   JsonDocument doc;
   doc["t"] = "SOS";
   doc["z"] = NODE_ID;
   doc["msg"] = msg;
-  doc["p"] = people;
-  doc["inj"] = injured ? 1 : 0;
+  if (people) doc["p"] = people;
+  if (inj >= 0) doc["inj"] = inj;  // 0 none, 1 hurt but mobile, 2 trapped
   originate(doc, true);
   SosRec& rec = sosLog[sosNext];
   sosNext = (sosNext + 1) % 8;
