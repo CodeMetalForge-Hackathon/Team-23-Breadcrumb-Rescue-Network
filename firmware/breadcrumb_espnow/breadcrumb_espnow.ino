@@ -57,6 +57,9 @@ static const uint32_t SOS_MIN_GAP_MS = 3000;  // ignore double taps / resubmits
 DNSServer dns;
 WebServer web(80);
 static uint32_t lastSos = 0;
+struct SosRec { char id[5]; bool acked; char reply[48]; };
+static SosRec sosLog[8];
+static int sosNext = 0;
 static const int LORA_CS = 10, LORA_RST = 11, LORA_INT = 9;
 static const float LORA_FREQ = 915.0;
 RH_RF95 rf95(LORA_CS, LORA_INT);
@@ -69,6 +72,12 @@ static const Link TOPOLOGY[] = {
   {"B2", {"SP1", "GW", nullptr}},
   {"B1", {"B2", nullptr, nullptr}},
   {"BASE", {"B1", nullptr, nullptr}},
+};
+
+// Downlink (ACK from BASE back toward the survivor): B1 accepts from BASE, B2 from B1.
+static const Link DOWNLINK[] = {
+  {"B1", {"BASE", nullptr, nullptr}},
+  {"B2", {"B1", nullptr, nullptr}},
 };
 
 static const uint8_t WIFI_CHANNEL = 1;
@@ -113,7 +122,12 @@ static const int BLE_MAX = 128;
 #define BLE_MIN_RSSI -75
 #endif
 static uint32_t bleSeen[BLE_MAX];
-static int bleCount = 0, bleApple = 0, bleBest = -127;
+#ifndef NEAR_RSSI
+#define NEAR_RSSI -45   // "right next to the breadcrumb" (~0.5 m): the hidden-phone demo
+#endif
+static const int NEAR_MAX = 16;
+static uint32_t nearSeen[NEAR_MAX];
+static int bleCount = 0, bleApple = 0, bleBest = -127, bleNear = 0;
 static portMUX_TYPE bleMux = portMUX_INITIALIZER_UNLOCKED;
 static BLEScan* bleScan = nullptr;
 
@@ -132,6 +146,11 @@ class PhoneCb : public BLEAdvertisedDeviceCallbacks {
     bool found = false;
     for (int i = 0; i < bleCount; i++) if (bleSeen[i] == h) { found = true; break; }
     if (!found && bleCount < BLE_MAX) { bleSeen[bleCount++] = h; if (apple) bleApple++; }
+    if (rssi > NEAR_RSSI) {
+      bool nf = false;
+      for (int i = 0; i < bleNear; i++) if (nearSeen[i] == h) { nf = true; break; }
+      if (!nf && bleNear < NEAR_MAX) nearSeen[bleNear++] = h;
+    }
     if (rssi > bleBest) bleBest = rssi;
     portEXIT_CRITICAL(&bleMux);
   }
@@ -157,8 +176,17 @@ static void remember(const char* id) {
   seenNext = (seenNext + 1) % SEEN_SIZE;
 }
 
-static bool acceptFrom(const char* hop) {
+static bool acceptFrom(const char* hop, bool downlink) {
   if (!demoTopology) return true;
+  if (downlink) {
+    for (const Link& l : DOWNLINK) {
+      if (strcmp(l.node, NODE_ID) != 0) continue;
+      for (const char* a : l.acceptFrom)
+        if (a && strcmp(a, hop) == 0) return true;
+      return false;
+    }
+    return false;  // BASE (or unlisted node) never takes downlink traffic
+  }
   for (const Link& l : TOPOLOGY) {
     if (strcmp(l.node, NODE_ID) != 0) continue;
     for (const char* a : l.acceptFrom)
@@ -207,7 +235,7 @@ static void schedule(const char* s) {
 }
 
 // Originate a message from this node (heartbeat, test alert)
-static void originate(JsonDocument& doc, bool resend = false) {
+static void originate(JsonDocument& doc, bool resend = false, bool radio = false) {
   char id[5];
   randomId(id);
   doc["id"] = id;
@@ -218,7 +246,7 @@ static void originate(JsonDocument& doc, bool resend = false) {
   size_t n = serializeJson(doc, buf, sizeof(buf));
   if (n == 0 || n > MSG_MAX) return;
   remember(id);
-  if (isCP) Serial.println(buf);
+  if (isCP && !radio) Serial.println(buf);
   else {
     sendRaw(buf, n);
     if (resend) schedule(buf);  // same id again 50-300 ms later: a lost frame gets a second chance
@@ -226,6 +254,10 @@ static void originate(JsonDocument& doc, bool resend = false) {
 }
 
 // ---- captive portal (B1) ----
+static SosRec* findSos(const char* id) {
+  for (SosRec& r : sosLog) if (r.id[0] && strcmp(r.id, id) == 0) return &r;
+  return nullptr;
+}
 static void portalRedirect() {
   web.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
   web.send(302, "text/plain", "");
@@ -252,7 +284,7 @@ static String cleanText(const String& in, size_t maxBytes) {
 
 static void handleSos() {
   uint32_t now = millis();
-  if (now - lastSos < SOS_MIN_GAP_MS && lastSos != 0) { web.send_P(200, "text/html", PAGE_SENT); return; }
+  if (now - lastSos < SOS_MIN_GAP_MS && lastSos != 0) { portalRedirect(); return; }
   lastSos = now;
   int people = constrain(web.arg("p").toInt(), 1, 99);
   bool injured = web.arg("inj") == "yes";
@@ -268,11 +300,29 @@ static void handleSos() {
   doc["p"] = people;
   doc["inj"] = injured ? 1 : 0;
   originate(doc, true);
+  SosRec& rec = sosLog[sosNext];
+  sosNext = (sosNext + 1) % 8;
+  strncpy(rec.id, doc["id"] | "", 4); rec.id[4] = 0;
+  rec.acked = false; rec.reply[0] = 0;
   strncpy(lastType, "SOS", sizeof(lastType) - 1);
   strncpy(lastFrom, "web", sizeof(lastFrom) - 1);
   screenDirty = true;
   Serial.printf("# sos %s\n", msg.c_str());
-  web.send_P(200, "text/html", PAGE_SENT);
+  String page = FPSTR(PAGE_SENT);
+  page.replace("%ID%", rec.id);
+  web.send(200, "text/html", page);
+}
+
+// GET /status?id=xxxx -> {"ack":true,"reply":"..."} once the rescuers acknowledged
+static void handleStatus() {
+  SosRec* r = findSos(web.arg("id").c_str());
+  JsonDocument d;
+  d["ack"] = r && r->acked;
+  if (r && r->acked) d["reply"] = r->reply;
+  String out;
+  serializeJson(d, out);
+  web.sendHeader("Cache-Control", "no-store");
+  web.send(200, "application/json", out);
 }
 
 static void portalBegin() {
@@ -280,6 +330,7 @@ static void portalBegin() {
   dns.start(53, "*", WiFi.softAPIP());
   web.on("/", HTTP_GET, []() { web.send_P(200, "text/html", PAGE_FORM); });
   web.on("/sos", HTTP_POST, handleSos);
+  web.on("/status", HTTP_GET, handleStatus);
   web.onNotFound(portalRedirect);  // /generate_204, /hotspot-detect.html, /connecttest.txt, ...
   web.begin();
   Serial.printf("# portal %s on %s\n", PORTAL_SSID, WiFi.softAPIP().toString().c_str());
@@ -295,7 +346,8 @@ static void handlePacket(const Packet& pk) {
   JsonArray rt = doc["rt"].as<JsonArray>();
   const char* hop = (rt && rt.size() > 0) ? (const char*)(rt[rt.size() - 1] | "?") : (doc["src"] | "?");
   if (strcmp(hop, NODE_ID) == 0 || strcmp(doc["src"] | "", NODE_ID) == 0) return;  // our own echo
-  if (!acceptFrom(hop)) return;  // demo topology filter (silent)
+  bool isAck = strcmp(doc["t"] | "", "ACK") == 0;
+  if (!acceptFrom(hop, isAck)) return;  // demo topology filter (silent)
   if (alreadySeen(id)) { cntDup++; return; }
   remember(id);
 
@@ -304,6 +356,16 @@ static void handlePacket(const Packet& pk) {
   strncpy(lastFrom, hop, sizeof(lastFrom) - 1);
   lastRssi = pk.rssi;
   screenDirty = true;
+
+  if (isAck && HAS_PORTAL) {
+    SosRec* r = findSos(doc["ref"] | "");
+    if (r) {
+      r->acked = true;
+      strncpy(r->reply, doc["msg"] | "Help is on the way", sizeof(r->reply) - 1);
+      r->reply[sizeof(r->reply) - 1] = 0;
+      Serial.printf("# ack %s: %s\n", r->id, r->reply);
+    }
+  }
 
   if (isCP) {
     doc["q"] = pk.rssi;  // RSSI of the last hop, for the dashboard
@@ -426,7 +488,35 @@ void setup() {
   Serial.printf("# {\"boot\":\"%s\",\"mac\":\"%s\"}\n", NODE_ID, WiFi.macAddress().c_str());
 }
 
+// BASE: the dashboard writes {"t":"ACK","ref":"<SOS id>","msg":"..."} lines to serial;
+// BASE sends them back down the chain over ESP-NOW.
+static void readSerialCommands() {
+  static char line[MAX_LEN + 1];
+  static int len = 0;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\r') continue;
+    if (c != '\n') { if (len < MAX_LEN) line[len++] = c; continue; }
+    line[len] = 0;
+    int n = len;
+    len = 0;
+    if (n == 0) continue;
+    JsonDocument cmd;
+    if (deserializeJson(cmd, line, n)) { Serial.println("# bad command (not JSON)"); continue; }
+    if (strcmp(cmd["t"] | "", "ACK") != 0 || !(cmd["ref"] | "")[0]) { Serial.println("# ignored command"); continue; }
+    JsonDocument ack;
+    ack["t"] = "ACK";
+    ack["ref"] = cmd["ref"] | "";
+    String m = cmd["msg"] | "Help is on the way";
+    if (m.length() > 40) m = m.substring(0, 40);
+    ack["msg"] = m;
+    originate(ack, true, true);
+    Serial.printf("# ack sent ref=%s\n", (const char*)(cmd["ref"] | ""));
+  }
+}
+
 void loop() {
+  if (isCP) readSerialCommands();
   if (HAS_PORTAL) {
     dns.processNextRequest();
     web.handleClient();
@@ -470,10 +560,10 @@ void loop() {
     static uint32_t lastBle = 0;
     if (now - lastBle >= BLE_REPORT_MS) {
       lastBle = now;
-      int n, best, ap;
+      int n, best, ap, nr;
       portENTER_CRITICAL(&bleMux);
-      n = bleCount; best = bleBest; ap = bleApple;
-      bleCount = 0; bleApple = 0; bleBest = -127;
+      n = bleCount; best = bleBest; ap = bleApple; nr = bleNear;
+      bleCount = 0; bleApple = 0; bleBest = -127; bleNear = 0;
       portEXIT_CRITICAL(&bleMux);
       if (n > 0) {
         JsonDocument ph;
@@ -481,6 +571,7 @@ void loop() {
         ph["n"] = n;
         ph["rssi"] = best;
         ph["ap"] = ap;
+        ph["nr"] = nr;  // devices closer than NEAR_RSSI
         ph["z"] = NODE_ID;
         originate(ph);
       }

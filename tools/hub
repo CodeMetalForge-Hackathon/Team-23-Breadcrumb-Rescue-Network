@@ -10,6 +10,7 @@
 #   hub label COM11 B2         name a port by hand
 #   hub update                 push tools/board_hub.py to the laptop (hub restarts in ~3 s)
 #                              KEEP admin_update in board_hub.py or this endpoint disappears
+#   hub dash                   push tools/dashboard.html (backup dashboard at http://127.0.0.1:8765/dash?token=...)
 set -euo pipefail
 HUB=${BOARD_HUB:-http://100.115.103.120:8765}
 TOKEN=${BOARD_HUB_TOKEN:-$(cat ~/.config/board_hub_token)}
@@ -38,6 +39,9 @@ case $cmd in
           python3 -m py_compile "$f"; sha=$(sha256sum "$f" | cut -d" " -f1)
           c -X POST -H "Content-Type: application/octet-stream" --data-binary @"$f" "$HUB/admin/update?sha=$sha" | pp
           sleep 5; c "$HUB/boards" >/dev/null && echo "hub back up" ;;
+  dash)   f="$ROOT/tools/dashboard.html"; sha=$(sha256sum "$f" | cut -d" " -f1)
+          c -X POST -H "Content-Type: application/octet-stream" --data-binary @"$f" "$HUB/admin/file?name=dashboard.html&sha=$sha" | pp
+          echo "open on the laptop: http://127.0.0.1:8765/dash?token=<token>" ;;
   deploy) node=$1
           if [[ $node == SP1 ]]; then
             arduino-cli compile --fqbn rp2040:rp2040:adafruit_feather_rfm --build-path "$ROOT/firmware/lora_bridge/build" "$ROOT/firmware/lora_bridge" | tail -2

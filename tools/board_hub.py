@@ -342,6 +342,19 @@ def make_handler(hub, token):
             if q is None:
                 return
             parts = [unquote(x) for x in urlparse(self.path).path.strip("/").split("/")]
+            if parts[0] in ("dash", "dashboard"):
+                # backup command-post dashboard: http://127.0.0.1:8765/dash?token=...
+                path = os.path.join(HERE, "dashboard.html")
+                if not os.path.exists(path):
+                    return self.reply(404, {"error": "dashboard.html missing next to board_hub.py"})
+                body = open(path, "rb").read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if parts[0] == "boards":
                 with hub.lock:
                     out = [{"label": hub.label_of(b), "port": b.dev, "usb": f"{b.vid:04X}:{b.pid:04X}",
@@ -401,6 +414,21 @@ def make_handler(hub, token):
             # restart_hub.ps1 runs the hub in a loop, so exiting is enough to load the new code
             threading.Timer(1.0, os._exit, [0]).start()
 
+        def admin_file(self, q, data):
+            """POST /admin/file?name=dashboard.html&sha=...: replace a whitelisted static file (no restart)."""
+            import hashlib
+            name = q.get("name", [""])[0]
+            if name not in ("dashboard.html",):
+                return self.reply(400, {"ok": False, "error": "name not allowed"})
+            got = hashlib.sha256(data).hexdigest()
+            if not data or (q.get("sha", [""])[0] or "").lower() != got:
+                return self.reply(400, {"ok": False, "error": "sha mismatch", "got": got})
+            path = os.path.join(HERE, name)
+            with open(path + ".new", "wb") as f:
+                f.write(data)
+            os.replace(path + ".new", path)
+            return self.reply(200, {"ok": True, "name": name, "sha": got})
+
         def _post(self):
             q = self.check()
             if q is None:
@@ -416,6 +444,8 @@ def make_handler(hub, token):
                 return self.reply(200, {"ok": True, "port": b.dev, "label": name})
             if parts == ["admin", "update"]:
                 return self.admin_update(q, data)
+            if parts == ["admin", "file"]:
+                return self.admin_file(q, data)
             if len(parts) != 2:
                 return self.reply(404, {"error": "unknown path"})
             b = hub.find(parts[1])
