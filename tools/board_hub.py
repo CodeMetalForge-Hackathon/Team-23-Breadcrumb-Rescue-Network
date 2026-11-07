@@ -61,6 +61,10 @@ class Board:
 class Hub:
     def __init__(self, esptool):
         self.esptool = esptool
+        if os.path.isfile(esptool) or shutil.which(esptool):
+            self.esptool_cmd = [esptool]
+        else:  # fall back to the pip package:  py -m pip install esptool
+            self.esptool_cmd = [sys.executable, "-m", "esptool"]
         self.boards = {}            # dev -> Board
         self.labels = {}            # key -> label
         self.lock = threading.RLock()
@@ -168,6 +172,8 @@ class Hub:
 
     # ---- flashing ----
     def run(self, cmd, timeout=180):
+        if cmd[0] == self.esptool:
+            cmd = self.esptool_cmd + cmd[1:]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return r.returncode, (r.stdout + r.stderr)[-4000:]
@@ -301,7 +307,7 @@ def make_handler(hub, token):
                     out = [{"label": hub.label_of(b), "port": b.dev, "usb": f"{b.vid:04X}:{b.pid:04X}",
                             "key": b.key, "desc": b.desc, "open": b.ser is not None,
                             "last": b.lines[-1][2] if b.lines else None} for b in hub.boards.values()]
-                return self.reply(200, {"boards": out, "flashing": sorted(hub.flashing),
+                return self.reply(200, {"boards": out, "flashing": sorted(hub.flashing), "esptool": hub.esptool_cmd,
                                         "uf2_drive": hub.uf2_drive()})
             if parts[0] == "log" and len(parts) == 2:
                 b = hub.find(parts[1])
@@ -396,7 +402,7 @@ def main():
         sys.stdout = sys.stderr = f
     hub = Hub(a.esptool or find_esptool())
     threading.Thread(target=hub.scan_forever, daemon=True).start()
-    print(f"board hub on {a.bind}:{a.port}, esptool={hub.esptool}", flush=True)
+    print(f"board hub on {a.bind}:{a.port}, esptool={hub.esptool_cmd}", flush=True)
     ThreadingHTTPServer((a.bind, a.port), make_handler(hub, a.token)).serve_forever()
 
 
