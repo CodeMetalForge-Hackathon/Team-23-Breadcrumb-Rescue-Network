@@ -19,3 +19,10 @@
 
 ## 现场硬件 (拍到的)
 - Raspberry Pi 5 + Raspberry Pi AI HAT+ (Hailo-8, 26 TOPS), 装在带 Pi-Camera 开口的外壳里, 见 photos/2026-11-07_hw_rpi5_ai_hat_plus_26tops.jpg
+
+## 主办方提供的硬件 (来源: data/organizer_email/Hackathon_Hardware_Details.pdf, 附在 2026-11-06 主办方邮件里)
+- 每队基础套件: Pi 5 (16GB) + 26 TOPS AI HAT; Arduino 兼容 MCU + Grove 扩展板; Grove 40 合 1 传感器套件
+- 共享借用库: Pi Zero / ESP32 / Jetson; 各类摄像头 (含深度相机和 NoIR 夜视); 热成像; 2D/3D LiDAR, ToF;
+  GPS/IMU; SDR, Wi-Fi, BT, LoRa, UWB 测距; mmWave 雷达, 多普勒雷达, PIR; 气体等环境传感器; 麦克风;
+  地面机器人; 微型无人机和 FPV 无人机; 示波器等测试设备
+- 周六 08:45 主办方做了 mission overview 和技术问答; 具体场景简报还没有拿到
