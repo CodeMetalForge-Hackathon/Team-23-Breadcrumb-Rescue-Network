@@ -196,6 +196,12 @@ class Cloud:
         points = np.column_stack((np.sin(angles) * distances, np.cos(angles) * distances,
                                   np.zeros(len(distances))))
         rotation = _tilt(acc)
+        if acc is not None and rotation is None:
+            # The IMU reads past 30 degrees or a shake (e.g. nodding the rig while the map is paused):
+            # drawing this scan level would paint a false wall, so skip it.
+            with self._lock:
+                self._rejected += 1
+            return
         required_height = np.zeros(len(points))
         if rotation is not None:
             points = points @ rotation  # row-vector form of rotation.T @ point
