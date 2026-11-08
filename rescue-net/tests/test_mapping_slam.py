@@ -155,3 +155,87 @@ def test_stationary_raw_noise_does_not_walk_the_map():
 def test_invalid_map_configuration_is_rejected_before_allocation(kwargs):
     with pytest.raises(ValueError):
         Slam2D(**kwargs)
+
+
+def _map_patch(slam, x, y):
+    grid, origin, resolution = slam.grid()
+    ix, iy = np.floor((np.array([x, y]) - origin) / resolution).astype(int)
+    return grid[iy - 1:iy + 2, ix - 1:ix + 2]
+
+
+def _tilted_acc(degrees):
+    gravity = np.array([1.45, 1.33, 21.26])
+    sideways = np.cross(gravity, [1., 0., 0.])
+    sideways *= np.linalg.norm(gravity) / np.linalg.norm(sideways)
+    angle = math.radians(degrees)
+    return math.cos(angle) * gravity + math.sin(angle) * sideways
+
+
+def test_floor_risk_points_never_enter_map_but_near_walls_are_kept():
+    angles = np.arange(360)
+    distances = np.where(angles < 180, 2000., 9000.)
+    slam = Slam2D(sensor_height_m=1., mount_tilt_deg=6.)
+    assert slam.update(angles, distances, acc=_tilted_acc(0.))["ok"]
+    assert 255 in _map_patch(slam, 2., 0.)
+    assert 0 in _map_patch(slam, 1., 0.)
+    # The suspicious far return is neither an obstacle nor a clearing ray.
+    assert np.all(_map_patch(slam, -9., 0.) == 127)
+    assert np.all(_map_patch(slam, -5., 0.) == 127)
+
+
+def test_carried_rig_near_range_default_is_explicitly_overridable():
+    angles = np.arange(360)
+    distances = np.where(angles < 180, 400., 2000.)
+    carried = Slam2D()
+    unobstructed = Slam2D(min_range=.25)
+    assert carried.update(angles, distances)["ok"]
+    assert unobstructed.update(angles, distances)["ok"]
+    assert np.all(_map_patch(carried, .4, 0.) == 127)
+    assert 255 in _map_patch(unobstructed, .4, 0.)
+    assert 255 in _map_patch(carried, -2., 0.)
+
+
+def test_valid_rig_tilt_tightens_floor_bound_without_rejecting_good_near_scan():
+    angles = np.arange(360)
+    distances = np.where(angles < 180, 2000., 4500.)
+    level, tilted = Slam2D(), Slam2D()
+    assert level.update(angles, distances, acc=_tilted_acc(0.))["ok"]
+    assert tilted.update(angles, distances, acc=_tilted_acc(9.))["ok"]
+    assert 255 in _map_patch(level, -4.5, 0.)
+    assert np.all(_map_patch(tilted, -4.5, 0.) == 127)
+    assert 255 in _map_patch(tilted, 2., 0.)
+    assert tilted.rejected == 0
+
+
+def test_no_acc_or_disabled_floor_bound_preserves_configured_range():
+    angles = np.arange(360)
+    distances = np.where(angles < 180, 2000., 9000.)
+    missing_acc = Slam2D()
+    disabled = Slam2D(sensor_height_m=None)
+    assert missing_acc.update(angles, distances)["ok"]
+    assert disabled.update(angles, distances, acc=_tilted_acc(0.))["ok"]
+    for slam in (missing_acc, disabled):
+        assert 255 in _map_patch(slam, -9., 0.)
+        assert slam.max_range == 12.  # Per-scan limits never mutate configuration.
+    np.testing.assert_array_equal(missing_acc.grid()[0], disabled.grid()[0])
+
+
+def test_floor_filter_does_not_bypass_whole_scan_tilt_gate():
+    slam = Slam2D(sensor_height_m=1., mount_tilt_deg=6.)
+    assert slam.update(*room_scan(), t=0., acc=_tilted_acc(0.))["ok"]
+    before = slam.grid()[0]
+    result = slam.update(*room_scan(), t=.1, acc=_tilted_acc(10.1))
+    assert not result["ok"] and result["reason"] == "tilted"
+    assert slam.path == [(0., 0., 0., 0.)]
+    np.testing.assert_array_equal(slam.grid()[0], before)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"sensor_height_m": 0}, {"sensor_height_m": -1},
+    {"sensor_height_m": float("inf")}, {"sensor_height_m": "bad"},
+    {"mount_tilt_deg": -1}, {"mount_tilt_deg": 90},
+    {"mount_tilt_deg": float("nan")},
+])
+def test_invalid_floor_calibration_is_rejected(kwargs):
+    with pytest.raises(ValueError):
+        Slam2D(**kwargs)

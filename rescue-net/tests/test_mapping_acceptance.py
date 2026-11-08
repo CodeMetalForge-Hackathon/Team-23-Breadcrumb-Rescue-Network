@@ -274,7 +274,11 @@ def test_tilt_is_rejected_before_any_integration(bootstrap):
 @pytest.mark.parametrize("degrees,accepted", [(9.9, True), (10.1, False)])
 def test_tilt_threshold_is_relative_to_calibrated_gravity(degrees, accepted):
     slam = Slam2D()
-    assert slam.update(*raycast(), t=0, acc=LEVEL_ACC)["ok"]
+    angles, distances = raycast()
+    # A compact room retains enough walls under conservative floor filtering,
+    # so this test isolates the IMU threshold rather than scan degeneracy.
+    distances *= 0.5
+    assert slam.update(angles, distances, t=0, acc=LEVEL_ACC)["ok"]
     before = snapshot(slam)
     gravity = LEVEL_ACC / np.linalg.norm(LEVEL_ACC)
     transverse = np.cross(gravity, [1.0, 0.0, 0.0])
@@ -282,10 +286,60 @@ def test_tilt_threshold_is_relative_to_calibrated_gravity(degrees, accepted):
     # Construct exactly the requested angle to the measured reference vector.
     angle = math.radians(degrees)
     acceleration = np.linalg.norm(LEVEL_ACC) * (math.cos(angle) * gravity + math.sin(angle) * transverse)
-    result = slam.update(*raycast(), t=0.1, acc=acceleration)
+    result = slam.update(angles, distances, t=0.1, acc=acceleration)
     assert bool(result["ok"]) == accepted, result
     if not accepted:
         assert_unchanged(slam, before)
+
+
+@pytest.mark.parametrize("height,expect_floor_ghost", [(1.0, False), (None, True)])
+def test_tilted_scan_plane_does_not_create_a_floor_wall_when_filter_enabled(height, expect_floor_ghost):
+    # Independent 3-D intersections: scanner 1 m above floor, 6° mount + 9° body
+    # pitch; walls x=±2, y=-12/+3. Downward rays hit floor 3.86–4.34 m away,
+    # producing a fictitious horizontal wall if treated as planar returns.
+    angles = np.arange(360, dtype=float)
+    bearings = np.deg2rad(angles)
+    pitch = math.radians(15)
+    dx = np.sin(bearings)
+    dy = np.cos(bearings) * math.cos(pitch)
+    dz = np.cos(bearings) * math.sin(pitch)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        side_walls = 2 / np.abs(dx)
+        end_walls = np.where(dy > 0, 3 / dy, -12 / dy)
+        floor = np.where(dz < 0, -1 / dz, np.inf)
+    intersections = np.stack((side_walls, end_walls, floor))
+    distances = np.round(intersections.min(axis=0) * 1000)
+    assert np.count_nonzero(np.argmin(intersections, axis=0) == 2) == 55
+    body_pitch = math.radians(9)
+    rotation = np.array([[1, 0, 0], [0, math.cos(body_pitch), -math.sin(body_pitch)],
+                         [0, math.sin(body_pitch), math.cos(body_pitch)]])
+    slam = Slam2D(sensor_height_m=height, mount_tilt_deg=6)
+    result = slam.update(angles, distances, t=0, acc=rotation @ LEVEL_ACC)
+    assert result["ok"], result
+    grid, origin, res = slam.grid()
+    rows, cols = np.indices(grid.shape)
+    x = origin[0] + (cols + 0.5) * res
+    y = origin[1] + (rows + 0.5) * res
+    ghost_region = (abs(x) < 1) & (y > -4.1) & (y < -3.7)
+    assert bool(np.any(grid[ghost_region] == 255)) == expect_floor_ghost
+    assert np.count_nonzero(grid == 255) > 20
+
+
+@pytest.mark.parametrize("minimum,expect_rig_ghost", [(None, False), (0.25, True)])
+def test_default_near_range_filter_excludes_fixed_rig_returns(minimum, expect_rig_ghost):
+    angles, distances = raycast()
+    # A carrier at 35 cm occludes two side sectors; it moves with the sensor,
+    # so its returns must not become fixed obstacles in the world map.
+    carrier = ((angles >= 45) & (angles <= 135)) | ((angles >= 225) & (angles <= 315))
+    distances[carrier] = 350
+    slam = Slam2D() if minimum is None else Slam2D(min_range=minimum)
+    assert slam.update(angles, distances, t=0)["ok"]
+    grid, origin, res = slam.grid()
+    rows, cols = np.indices(grid.shape)
+    x = origin[0] + (cols + 0.5) * res
+    y = origin[1] + (rows + 0.5) * res
+    near_rig = np.hypot(x, y) < 0.5
+    assert bool(np.any(grid[near_rig] == 255)) == expect_rig_ghost
 
 
 def test_rejected_counter_counts_only_rejected_updates():

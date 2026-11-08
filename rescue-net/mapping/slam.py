@@ -14,6 +14,16 @@ Symmetric rooms, long featureless corridors, severe scan distortion and motion
 beyond the bounded search can still make localization ambiguous. ``ok`` is a
 quality gate, not a mathematical guarantee of the correct pose.
 
+With acceleration available, a calibrated sensor-height/mount-angle bound
+excludes distances at which the tilted beam could intersect a level floor.
+This is deliberately independent of the unknown mount tilt axis. The default
+calibration is the carried rig's minimum 1 m height and 6 degree mount tilt;
+it is not appropriate to every installation. Set ``sensor_height_m=None`` to
+disable that bound, or supply the installation's conservative minimum height.
+The carried-rig default ``min_range=0.6`` also excludes close operator/body
+returns from matching and mapping. It is an explicit range setting, not an
+inferred body mask, and can be overridden for a different unobstructed mount.
+
 ``grid()`` returns ``(uint8_array, (xmin, ymin), resolution)``. The array is
 indexed [iy, ix], row zero is the minimum world y, and values are exactly 0
 (free), 127 (unknown), and 255 (occupied). It is a snapshot, safe for a caller
@@ -56,6 +66,17 @@ class Slam2D:
     from (1.45, 1.33, 21.26) rejects the whole scan. Missing acceleration is
     allowed. No gravity/tilt compensation is guessed from bad measurements.
 
+    Keyword-only ``sensor_height_m`` is the minimum height above a level floor;
+    ``mount_tilt_deg`` bounds the LiDAR plane's fixed tilt relative to the level
+    rig. For valid acceleration, returns farther than
+    ``0.95*height / sin(relative_tilt + mount_tilt + 1 degree)`` are ignored in
+    both matching and occupancy integration, with total angle capped at 90
+    degrees. The 5% height reduction and 1 degree angular allowance are safety
+    margins, not an estimated tilt axis. Real distant walls are also excluded:
+    a single scan cannot reliably distinguish them from floor intersections.
+    Missing acceleration or ``sensor_height_m=None`` leaves ``max_range`` in
+    force. The original 10 degree whole-scan rejection remains unchanged.
+
     Result keys: x, y, th, ok, score, reason. Score is a normalized [0, 1]
     endpoint-map agreement (the initial seed has score 1). Rejected results
     report the unchanged accepted pose. ``path`` contains accepted scans only,
@@ -67,7 +88,8 @@ class Slam2D:
     60 degrees around a bounded prediction; long outages may need a new mapper.
     """
 
-    def __init__(self, res=.05, size_m=40, min_range=.25, max_range=12):
+    def __init__(self, res=.05, size_m=40, min_range=.6, max_range=12, *,
+                 sensor_height_m=1.0, mount_tilt_deg=6.0):
         values = np.asarray((res, size_m, min_range, max_range), dtype=float)
         res, size_m, min_range, max_range = map(float, values)
         if (not np.isfinite(values).all() or res <= 0 or size_m <= 0
@@ -76,10 +98,21 @@ class Slam2D:
         n = int(math.ceil(float(size_m) / float(res)))
         if not 16 <= n <= 4096:
             raise ValueError("map side must contain between 16 and 4096 cells")
+        try:
+            height = None if sensor_height_m is None else float(sensor_height_m)
+            mount_tilt = float(mount_tilt_deg)
+        except (ValueError, TypeError, OverflowError):
+            raise ValueError("sensor height and mount tilt must be finite numbers") from None
+        if height is not None and (not math.isfinite(height) or height <= 0):
+            raise ValueError("sensor_height_m must be positive and finite, or None")
+        if not math.isfinite(mount_tilt) or not 0 <= mount_tilt < 90:
+            raise ValueError("mount_tilt_deg must be finite and in [0, 90)")
         self.res = float(res)
         self.size_m = n * self.res
         self.min_range = float(min_range)
         self.max_range = float(max_range)
+        self.sensor_height_m = height
+        self.mount_tilt_deg = mount_tilt
         self.origin_xy = (-self.size_m / 2., -self.size_m / 2.)
         self._n = n
         self._evidence = np.zeros((n, n), dtype=np.int16)
@@ -168,7 +201,19 @@ class Slam2D:
             return "tilted"
         return None
 
-    def _points(self, ang_deg, dist_mm):
+    def _trusted_range(self, acc):
+        """Axis-independent floor-risk distance; called after the IMU gate."""
+        if acc is None or self.sensor_height_m is None:
+            return self.max_range
+        a = np.asarray(acc, dtype=np.float64)
+        cosine = float(a @ _LEVEL) / float(np.linalg.norm(a))
+        tilt = math.acos(max(-1., min(1., cosine)))
+        downward_angle = min(math.pi / 2.,
+                             tilt + math.radians(self.mount_tilt_deg + 1.))
+        floor_bound = .95 * self.sensor_height_m / math.sin(downward_angle)
+        return min(self.max_range, floor_bound)
+
+    def _points(self, ang_deg, dist_mm, trusted_range=None):
         try:
             angle = np.asarray(ang_deg, dtype=np.float64)
             distance = np.asarray(dist_mm, dtype=np.float64)
@@ -179,7 +224,8 @@ class Slam2D:
             return None, "malformed_scan"
         valid = (np.isfinite(angle) & np.isfinite(distance)
                  & (distance >= self.min_range * 1000.)
-                 & (distance <= self.max_range * 1000.) & (distance > 0))
+                 & (distance <= (self.max_range if trusted_range is None
+                                 else trusted_range) * 1000.) & (distance > 0))
         angle = angle[valid] % 360.
         distance = distance[valid] * .001
         if angle.size < 40 or np.unique(np.floor(angle)).size < 40:
@@ -214,7 +260,7 @@ class Slam2D:
                     return self._result(False, reason="non_monotonic_time")
             else:
                 dt = .1
-            points, reason = self._points(ang_deg, dist_mm)
+            points, reason = self._points(ang_deg, dist_mm, self._trusted_range(acc))
             if reason:
                 return self._result(False, reason=reason)
 

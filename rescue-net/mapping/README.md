@@ -22,7 +22,10 @@ The integration contract is:
 ```python
 from mapping.slam import Slam2D
 
-slam = Slam2D()
+slam = Slam2D(
+    res=0.05, size_m=40, min_range=0.6, max_range=12,
+    sensor_height_m=1.0, mount_tilt_deg=6.0,
+)
 result = slam.update(angles_deg, ranges_mm, timestamp_s, acc=acc_counts_or_none)
 # result: dict with x, y, th, ok (boolean), score (normalized 0..1)
 # Optional reason explains a rejected scan.
@@ -48,9 +51,31 @@ reference counts `[1.45, 1.33, 21.26]`. It also rejects acceleration magnitudes
 outside 0.7–1.3 times the reference magnitude. Missing accelerometer readings
 are allowed, so those scans have no accelerometer-based tilt check.
 
-The fixed 6-degree mounting tilt is not geometrically corrected because its
-direction is unknown. Floor or ceiling returns can therefore become apparent
-obstacles in the 2D map even when localization and the tilt gate succeed.
+The default minimum range is 0.6 m. The previous 0.25 m cutoff already removed
+reported rig returns near 0.1 m, but walk2 also contains persistent rear returns
+at roughly 0.3–0.6 m during motion. Operator/body occlusion is a plausible source,
+not a confirmed object classification. The new cutoff also discards real nearby
+obstacles; callers can override `min_range` for another installation.
+
+With valid accelerometer data, matching and map integration also discard ranges
+beyond a conservative floor-intersection bound:
+
+```text
+total_tilt = min(90 degrees, relative_tilt + mount_tilt_deg + 1 degree)
+effective_max_range = min(max_range, 0.95 * sensor_height_m / sin(total_tilt))
+```
+
+`sensor_height_m` is the minimum sensor height above a level floor, defaulting to
+1.0 m; `mount_tilt_deg` bounds the fixed LiDAR-plane inclination, defaulting to
+6 degrees. The 5% height reduction and extra degree are modeling margins. The
+mount tilt axis is unknown, so this is a range restriction, not per-ray floor
+classification or geometric tilt correction. It also discards real distant
+walls and can weaken along-corridor localization. The integer accelerometer
+resolution is about 2.7 degrees per horizontal count near level. Floor/ceiling
+returns and scan distortion can still corrupt the map. Setting
+`sensor_height_m=None`, or supplying no accelerometer reading, disables this
+additional cap; the configured `max_range` still applies. The 10-degree
+whole-scan tilt rejection remains in force when acceleration is supplied.
 
 The default map is a fixed 40 m square centred on the seed. Matching uses an
 accumulated field of mostly static structure; there is no global loop closure
@@ -60,12 +85,35 @@ distorted scans. Quality gates reduce bad updates but do not guarantee that a
 map never becomes corrupted. Longer outages expand the local search, which can
 exceed 30 ms per update and still fail to recover tracking.
 
-Synthetic benchmarks used Linux under WSL2, Python 3.12.3, NumPy 2.4.3, and an
+Initial synthetic benchmarks used Linux under WSL2, Python 3.12.3, NumPy 2.4.3, and an
 Intel Xeon Gold 6230R. For simulated 6.5 m walks at 1 m/s with 4 Hz and 10 Hz
 scan streams, update latency was approximately 16–17 ms at p50 and 19–20 ms at
 p95; position RMSE was 1.9–3.2 cm. These figures describe those synthetic cases,
-not general accuracy or timing guarantees. Windows Python 3.13 and a real
-handheld walk have not been benchmarked.
+not general accuracy or timing guarantees. Windows Python 3.13 has not been
+benchmarked. Offline real-recording checks must distinguish return-to-start
+agreement from intermediate trajectory accuracy: good final closure alone can
+hide compressed or distorted corridor geometry. No intermediate positions in
+walk2 have been surveyed, and the mapper does not enforce a known endpoint.
+
+An independent offline replay of the 3,411-scan, 419.81 s `walk2.jsonl.gz` on
+the same Linux environment compared the original mapper with the combined
+0.6 m minimum and attitude-dependent maximum range:
+
+| Implementation | Accepted / rejected scans | BASE MARK to final position | Update p95 |
+| --- | ---: | ---: | ---: |
+| Original 0.25–12 m range | 3,177 / 234 | 8.2165 m | 12.50 ms |
+| Current combined filtering | 3,183 / 228 | 0.0662 m | 16.02 ms |
+
+The current run's rejects were 227 excessive-tilt scans and one implausible
+motion. Its update p50 was 11.82 ms, p99 18.86 ms, and maximum 70.32 ms; the
+complete instrumented replay took 39.58 s. The human reported returning within
+0.5 m of BASE. The MARK occurs about 118.4 s after recording begins, and the
+table measures from that MARK's estimated pose. This is one recorded walk with
+an approximate return constraint, not surveyed centimetre-level ground truth
+or a general accuracy benchmark. The first and final locations were not
+supplied to the mapper as constraints. Independently masking only near or far
+returns also improved final closure, so these results do not establish floor
+contamination as the sole cause of the original drift.
 
 ## Recording and replay
 
