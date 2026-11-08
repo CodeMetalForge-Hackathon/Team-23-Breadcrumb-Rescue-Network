@@ -44,7 +44,9 @@ except Exception as e:
 
 PERSON_TTL = 180          # s a person stays on the map after the last sighting
 MERGE_M, MERGE_IDLE = 0.8, 1.0   # a new track id this close to a person not updated for this long = same person
-PERSON_TILT_MAX = 10.0    # deg (meta "tilt"): past this, a LiDAR range to a person is not used (same as SLAM)
+PERSON_TILT_MAX = 10.0    # deg (meta "tilt"): past this, a LiDAR range to a person is suspect (same gate as SLAM)
+TILT_SAME_DEG, TILT_SAME_S = 15.0, 5.0   # tilted rig: a new track id this close in bearing, this soon = same person
+LIDAR_MOUNT_TILT_DEG = 3.0   # LiDAR plane vs the rig, re-mounted 2026-11-08 07:15 EST (was 6): SLAM and 3D range-risk rule
 PNG_EVERY = 1.0           # s between map image renders
 RELAY_EVERY = 3.0
 RSSI_NODE = "B2"          # the spotter's Wi-Fi RSSI (bulk meta "rssi") is measured to B2's RESCUE-LINK AP
@@ -76,6 +78,11 @@ def sensor_to_map(pose, bearing_deg, range_m):
     return px + math.cos(th) * sx + math.sin(th) * sy, py - math.sin(th) * sx + math.cos(th) * sy
 
 
+def _angdiff(a, b):
+    """a - b wrapped to -180..180 degrees."""
+    return (a - b + 180.0) % 360.0 - 180.0
+
+
 class MapState:
     def __init__(self, nodes_file="logs/map_nodes.json"):
         self.lock = threading.Lock()
@@ -96,12 +103,13 @@ class MapState:
         self.scans, self.last_scan, self.hz = 0, None, 0.0
         self.scan_ok, self.reject_reason = True, None
         self.link = {}                       # lvl, rssi, tilt from the last meta
+        self.tilted = False                  # rig tilted past PERSON_TILT_MAX at the last meta
         self.rssi_samples = []               # (x, y, rssi dBm, node) along the walk: measured link to RSSI_NODE
         self._rssi_t = 0.0
         self.cloud = None
         if Cloud is not None:
             try:
-                self.cloud = Cloud()
+                self.cloud = Cloud(mount_tilt_deg=LIDAR_MOUNT_TILT_DEG)
             except Exception:
                 log.exception("Cloud()")
         # node positions are not reloaded: a new run starts a new SLAM origin, so old positions would be wrong.
@@ -111,7 +119,7 @@ class MapState:
         if Slam2D is None:
             return
         try:
-            self.slam = Slam2D()
+            self.slam = Slam2D(mount_tilt_deg=LIDAR_MOUNT_TILT_DEG)
         except Exception as e:
             self.slam, self.slam_error = None, str(e)
             log.exception("Slam2D()")
@@ -183,14 +191,13 @@ class MapState:
                     self._rssi_t = now
                     if len(self.rssi_samples) > 4000:
                         self.rssi_samples = self.rssi_samples[::2]
-        # Rig tilted past the SLAM gate: the LiDAR plane hits the desk or floor in front of the person, so a
-        # LiDAR range ("rs": "L") is a wrong, short distance (one person became three dots, 2026-11-08).
-        # Keep that person's last good position instead (a new track gets none until the rig is level).
+        # Rig tilted past the SLAM gate: the LiDAR plane can hit the desk or floor in front of the person, so a
+        # LiDAR range is suspect (one person became three dots at 3.0 / 1.2 / 0.6 m, 2026-11-08). add_person
+        # then keeps the person on the map with their last level range (see there).
         tilt = m.get("tilt")
-        tilted = self.reject_reason == "tilted" or (tilt is not None and tilt > PERSON_TILT_MAX)
+        self.tilted = self.reject_reason == "tilted" or (tilt is not None and tilt > PERSON_TILT_MAX)
         for p in m.get("persons") or []:
-            r = None if tilted and p.get("rs") == "L" else p.get("r")
-            self.add_person(p.get("id"), p.get("b"), r, ps=p.get("ps"), src=p.get("src"),
+            self.add_person(p.get("id"), p.get("b"), p.get("r"), ps=p.get("ps"), src=p.get("src"),
                             c=p.get("c"), rs=p.get("rs"), kp=p.get("kp"), via="bulk", now=now)
 
     def add_alert(self, msg, now=None):
@@ -208,7 +215,22 @@ class MapState:
         now = time.time() if now is None else now
         pid = str(pid)
         with self.lock:
-            if pid not in self.persons and r:              # tracker gave a new id: take over a nearby idle entry
+            # Tilted rig and a LiDAR range (LoRa alerts carry no rs): the range may be the desk, not the person.
+            # The person stays on the map: a new track id at the same bearing just now is the same person
+            # re-tracked (no extra dot), and the range is the last one measured with the rig level. Only a
+            # person first seen while tilted gets the suspect range, flagged "rq": "tilt", until the rig is level.
+            unsure = bool(self.tilted and rs in ("L", None) and r)
+            if unsure and pid not in self.persons:
+                near = [(abs(_angdiff(float(b), float(q["b"]))), k) for k, q in self.persons.items()
+                        if q.get("b") is not None and now - q["seen"] <= TILT_SAME_S]
+                near = [(d, k) for d, k in near if d <= TILT_SAME_DEG]
+                if near:
+                    q = self.persons.pop(min(near)[1])
+                    q["id"], q["merged"] = pid, q.get("merged", 0) + 1
+                    self.persons[pid] = q
+            if unsure and self.persons.get(pid, {}).get("r_ok"):
+                r, unsure = self.persons[pid]["r_ok"], False
+            if pid not in self.persons and r and not unsure:   # tracker gave a new id: take over a nearby idle entry
                 x, y = sensor_to_map(self.pose, float(b), float(r))
                 near = [(math.hypot(q["x"] - x, q["y"] - y), k) for k, q in self.persons.items()
                         if q.get("x") is not None and now - q["seen"] >= MERGE_IDLE]
@@ -221,6 +243,12 @@ class MapState:
             p = self.persons.setdefault(pid, {"id": pid, "first": now})
             p.update(ps=ps or p.get("ps"), src=src or p.get("src"), c=c if c is not None else p.get("c"),
                      rs=rs, via=via, seen=now, b=b, r=r)
+            if r and not unsure and not (self.tilted and rs in ("L", None)):
+                p["r_ok"] = r                              # measured with the rig level (or not by the LiDAR)
+            if unsure:
+                p["rq"] = "tilt"
+            else:
+                p.pop("rq", None)
             if kp is not None:                             # 17 COCO keypoints, % of the box (bulk meta only)
                 p["kp"] = kp
             if r:                                          # unknown range: keep the last known position

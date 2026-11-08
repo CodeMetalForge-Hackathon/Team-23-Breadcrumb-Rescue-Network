@@ -53,7 +53,7 @@ def main():
     rem = Remote(on_object=on_object)
     f.write(json.dumps({"meta": {"source": "bulk link via BASE (tools/tap_walk.py)", "bins": "1 deg, nearest",
                                  "acc_ref_level": [1.45, 1.33, 21.26], "acc_counts_per_g": 21.33,
-                                 "lidar_mount_tilt_deg": 6,
+                                 "lidar_mount_tilt_deg": 3,   # re-mounted 2026-11-08 (was 6)
                                  "angle": "deg clockwise from LiDAR front, point = (sin(a)*d, cos(a)*d)"}}) + "\n")
     req = urllib.request.Request(f"{HUB}/log/BASE?n=1", headers={"X-Token": TOKEN})
     with urllib.request.urlopen(req, timeout=15) as r:

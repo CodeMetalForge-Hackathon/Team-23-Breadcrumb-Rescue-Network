@@ -1,30 +1,58 @@
-"""A tilted rig must not move people on the map with LiDAR ranges (the beam hits the desk in front of them)."""
+"""A tilted rig: the LiDAR range to a person may be the desk in front of them. People must stay on the map,
+one dot each, at their last range measured with the rig level."""
+import math
+
 from dashboard.mapview import MapState
 
 
-def _meta(tilt, r, pid=1, rs="L"):
-    return {"tilt": tilt, "persons": [{"id": pid, "b": 0, "r": r, "rs": rs, "ps": "U", "c": 60, "src": "C"}]}
+def _meta(tilt, r, pid=1, b=0, rs="L"):
+    return {"tilt": tilt, "persons": [{"id": pid, "b": b, "r": r, "rs": rs, "ps": "U", "c": 60, "src": "C"}]}
 
 
-def test_tilted_lidar_range_keeps_last_position(tmp_path):
-    ms = MapState(nodes_file=tmp_path / "nodes.json")
+def _ms(tmp_path):
+    return MapState(nodes_file=tmp_path / "nodes.json")
+
+
+def test_tilted_keeps_last_level_range_and_follows_bearing(tmp_path):
+    ms = _ms(tmp_path)
     ms.add_meta(_meta(2.0, 3.0), now=100.0)
     p = ms.persons["1"]
-    x0, y0 = p["x"], p["y"]
-    ms.add_meta(_meta(25.0, 1.2), now=101.0)           # tilted: the 1.2 m return is the desk, not the person
-    assert (p["x"], p["y"]) == (x0, y0)
-    assert p["seen"] == 101.0                          # still counted as seen
-    ms.add_meta(_meta(3.0, 2.5), now=102.0)            # level again: the range is used
-    assert (p["x"], p["y"]) != (x0, y0)
+    d0 = math.hypot(p["x"], p["y"])
+    ms.add_meta(_meta(25.0, 1.2, b=20), now=101.0)     # tilted: 1.2 m is the desk; bearing still good
+    assert math.isclose(math.hypot(p["x"], p["y"]), d0, abs_tol=0.02)
+    assert p["seen"] == 101.0 and p["b"] == 20 and "rq" not in p
+    ms.add_meta(_meta(3.0, 2.5), now=102.0)            # level again: the new range is used
+    assert math.isclose(math.hypot(p["x"], p["y"]), 2.5, abs_tol=0.02)
 
 
-def test_tilted_new_track_gets_no_position(tmp_path):
-    ms = MapState(nodes_file=tmp_path / "nodes.json")
-    ms.add_meta(_meta(25.0, 0.6, pid=7), now=100.0)
-    assert ms.persons["7"]["x"] is None                # listed, but no dot at a wrong spot
+def test_tilted_new_track_same_bearing_is_same_person(tmp_path):
+    ms = _ms(tmp_path)
+    ms.add_meta(_meta(2.0, 3.0, pid=61, b=352), now=100.0)
+    ms.add_meta(_meta(25.0, 1.2, pid=62, b=357), now=102.0)   # tracker re-id while tilted
+    ms.add_meta(_meta(25.0, 0.6, pid=68, b=355), now=104.0)
+    assert list(ms.persons) == ["68"]                  # one dot, not three
+    q = ms.persons["68"]
+    assert math.isclose(math.hypot(q["x"], q["y"]), 3.0, abs_tol=0.02)
 
 
-def test_tilted_box_size_range_still_used(tmp_path):
-    ms = MapState(nodes_file=tmp_path / "nodes.json")
+def test_tilted_first_sighting_still_placed_but_flagged(tmp_path):
+    ms = _ms(tmp_path)
+    ms.add_meta(_meta(25.0, 1.5, pid=7), now=100.0)
+    q = ms.persons["7"]
+    assert q["x"] is not None and q["rq"] == "tilt"    # on the map, marked unsure
+    ms.add_meta(_meta(2.0, 2.8, pid=7), now=101.0)
+    assert "rq" not in q and math.isclose(math.hypot(q["x"], q["y"]), 2.8, abs_tol=0.02)
+
+
+def test_tilted_box_size_range_used_as_is(tmp_path):
+    ms = _ms(tmp_path)
     ms.add_meta(_meta(25.0, 2.0, rs="S"), now=100.0)   # range from the box size does not depend on the LiDAR
-    assert ms.persons["1"]["x"] is not None
+    q = ms.persons["1"]
+    assert "rq" not in q and math.isclose(math.hypot(q["x"], q["y"]), 2.0, abs_tol=0.02)
+
+
+def test_two_people_far_apart_in_bearing_stay_two(tmp_path):
+    ms = _ms(tmp_path)
+    ms.add_meta(_meta(25.0, 2.0, pid=1, b=0), now=100.0)
+    ms.add_meta(_meta(25.0, 2.0, pid=2, b=90), now=100.5)
+    assert sorted(ms.persons) == ["1", "2"]
