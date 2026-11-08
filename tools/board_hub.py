@@ -117,8 +117,11 @@ class Hub:
         with open(os.path.join(LOG_DIR, f"{name}.log"), "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d')} {ts} {text}\n")
 
+    STALL_S = 15   # a board that talked before but is silent this long: reopen the port (Windows CDC stall, error 31)
+
     def reader(self, b):
         buf = b""
+        last_rx, talked = time.time(), False
         while not b.stop.is_set():
             try:
                 if b.ser is None:
@@ -130,6 +133,15 @@ class Hub:
                 data = b.ser.read(1024)
             except Exception:
                 self.close(b)
+                time.sleep(1)
+                continue
+            now = time.time()
+            if data:
+                last_rx, talked = now, True
+            elif talked and now - last_rx > self.STALL_S:
+                print(f"{self.label_of(b) or b.dev}: silent {now - last_rx:.0f} s, reopening {b.dev}", flush=True)
+                self.close(b)
+                buf, last_rx = b"", now
                 time.sleep(1)
                 continue
             if data:
