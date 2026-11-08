@@ -73,8 +73,15 @@ def main():
     detector, thermal = build_sources(args, cfg)
     sink = build_sink(args, cfg)
     view = None if args.no_debugview else debugview.start(cfg["debug_port"])
+    th_det = None
     if view is not None and not args.no_extra_sensors:
         cam, lid = add_extra_views(view)
+        if hasattr(detector, "infer") and cam.device:      # pose model on the thermal camera too
+            from spotter import ircam
+            from spotter.thermal_detect import ThermalDetector
+            th_det = ThermalDetector(detector, cam)
+            view.extras["thermal"] = lambda q: ircam.render(view.cv2, cam.latest(), cam.status, cam.fps,
+                                                            dets=th_det.dets, cfg=cfg.data)
         if not args.no_bulk:
             from spotter.bulklink import BulkLink
             BulkLink(view, cam, lid, period=float(cfg.data.get("bulk_period", 0.25)),
@@ -99,7 +106,9 @@ def main():
             frame = thermal.latest()
             while recent and now - recent[0][0] > 1.0:
                 recent.popleft()
-            analysis = fusion.analyze(dets, frame, cfg, [d for _, ds in recent for d in ds])
+            th_dets = th_det.step(cfg.data) if th_det else None
+            analysis = fusion.analyze(dets, frame, cfg, [d for _, ds in recent for d in ds],
+                                      th_dets=th_dets, th_x_scale=th_det.x_scale if th_det else 1.25)
             recent.append((now, dets))
             reject_log(analysis, now)
 
@@ -112,9 +121,9 @@ def main():
             for key in debouncer.update(best, now):
                 c = best[key]
                 outbox.append(make_msg(c["t"], cfg["src"], cfg["ttl"], c=c["c"], th=c.get("th"),
-                                       z=cfg["zone"], v=c["v"], dt=c["dt"], ps=c.get("ps") or None))
-                log.info("ALERT %s view=%s c=%d th=%s dt=%s ps=%s", c["t"], c["v"], c["c"], c.get("th", "-"),
-                         c["dt"], c.get("ps") or "-")
+                                       z=cfg["zone"], v=c["v"], dt=c["dt"], ps=c.get("ps") or None, s=c.get("s")))
+                log.info("ALERT %s view=%s c=%d th=%s dt=%s ps=%s%s", c["t"], c["v"], c["c"], c.get("th", "-"),
+                         c["dt"], c.get("ps") or "-", " (thermal camera only)" if c.get("s") == "T" else "")
 
             if last_hb is None or now - last_hb >= cfg["hb_interval_s"]:
                 outbox.append(make_msg("HB", cfg["src"], cfg["ttl"], z=cfg["zone"]))

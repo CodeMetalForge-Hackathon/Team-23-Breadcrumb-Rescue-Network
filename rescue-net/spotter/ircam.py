@@ -76,13 +76,33 @@ class IRCamera:
             time.sleep(1)
 
 
-def render(cv2, frame, status="", fps=0.0):
-    """False-colour view (inferno: hot = bright yellow)."""
+SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)]
+
+
+def render(cv2, frame, status="", fps=0.0, dets=(), cfg=None):
+    """False-colour view (inferno: hot = bright yellow), with the people the pose model found on it."""
     if frame is None:
         img = __import__("numpy").full((512, 640, 3), 30, "uint8")
         cv2.putText(img, f"THERMAL {status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (160, 160, 160), 1)
         return img
     img = cv2.applyColorMap(frame, cv2.COLORMAP_INFERNO)
+    h, w = img.shape[:2]
+    for d in dets or ():
+        x0, y0, x1, y1 = int(d.x0 * w), int(d.y0 * h), int(d.x1 * w), int(d.y1 * h)
+        cv2.rectangle(img, (x0, y0), (x1, y1), (0, 220, 0), 2)
+        kpts = getattr(d, "kpts", None)
+        if kpts is not None:
+            for i, j in SKELETON:
+                if kpts[i][2] >= 0.5 and kpts[j][2] >= 0.5:
+                    cv2.line(img, (int(kpts[i][0] * w), int(kpts[i][1] * h)),
+                             (int(kpts[j][0] * w), int(kpts[j][1] * h)), (255, 255, 0), 2)
+        label = f"PERSON {d.score:.2f}"
+        if cfg is not None:
+            from spotter.posture import posture
+            label += {"D": " DOWN", "U": " up"}.get(posture(d, cfg, x_scale=w / h), "")
+        org = (x0 + 2, max(y0 - 6, 14))
+        cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3)
+        cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1)
     cv2.rectangle(img, (0, img.shape[0] - 26), (420, img.shape[0]), (0, 0, 0), -1)
     cv2.putText(img, f"THERMAL {status}  {fps:.0f} fps  (relative, white-hot AGC)",
                 (6, img.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (230, 230, 230), 1)

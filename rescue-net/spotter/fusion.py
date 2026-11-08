@@ -13,7 +13,7 @@ ROWS, COLS = 24, 32          # MLX90640 default, only used when no frame shape i
 
 HeatBlob = namedtuple("HeatBlob", "u v tu tv dt pixels")
 Person = namedtuple("Person", "det decision dt")          # decision: confirmed | uncertain | rejected
-Analysis = namedtuple("Analysis", "candidates persons blobs ambient")
+Analysis = namedtuple("Analysis", "candidates persons blobs ambient th_persons", defaults=((),))
 
 
 def cam_to_thermal(u, v, cfg):
@@ -137,10 +137,13 @@ def find_heat_blobs(thermal, cfg, person_rects=()):
     return blobs
 
 
-def analyze(dets, thermal, cfg, recent_dets=()):
+def analyze(dets, thermal, cfg, recent_dets=(), th_dets=None, th_x_scale=1.25):
     """One detection frame -> alert candidates (dicts with t, c, th, v, dt) + details for the debug view.
     recent_dets: person boxes from the last ~1 s. Heat inside them is not HEAT, because the 4 Hz thermal
-    frame lags the camera and the detector drops frames, which would turn body heat into false HEAT alerts."""
+    frame lags the camera and the detector drops frames, which would turn body heat into false HEAT alerts.
+    th_dets: people the pose model found on the USB thermal camera (None = no such camera). A camera person
+    gets th=1 when the thermal camera sees someone too; with no camera person (lights off, smoke) each
+    thermal person becomes a PERSON candidate of its own, marked s="T"."""
     persons, candidates = [], []
     for det in dets:
         decision, dt = classify_person(det, thermal, cfg)
@@ -152,10 +155,21 @@ def analyze(dets, thermal, cfg, recent_dets=()):
             "th": None if thermal is None else (1 if decision == "confirmed" else 0),   # no thermal camera: no th
             "v": view_of((det.x0 + det.x1) / 2), "dt": None if dt is None else round(dt),
         }
+        if thermal is None and th_dets:            # USB thermal camera confirms a warm person
+            cand["th"] = 1
         ps = posture(det, cfg)
         if ps:
             cand["ps"] = ps                        # "D" on the ground / "U" upright
         candidates.append(cand)
+
+    if th_dets and not candidates:                 # the camera sees nobody: trust the thermal camera alone
+        for det in th_dets:
+            cand = {"t": "PERSON", "c": round(det.score * 100), "th": 1, "s": "T",
+                    "v": view_of((det.x0 + det.x1) / 2), "dt": None}
+            ps = posture(det, cfg, x_scale=th_x_scale)
+            if ps:
+                cand["ps"] = ps
+            candidates.append(cand)
 
     blobs, ambient = [], None
     if thermal is not None:
@@ -163,4 +177,4 @@ def analyze(dets, thermal, cfg, recent_dets=()):
         blobs = find_heat_blobs(thermal, cfg, [box_to_thermal(d, cfg) for d in (*dets, *recent_dets)])
         for b in blobs:
             candidates.append({"t": "HEAT", "c": cfg["heat_conf"], "v": view_of(b.u), "dt": round(b.dt)})
-    return Analysis(candidates, persons, blobs, ambient)
+    return Analysis(candidates, persons, blobs, ambient, tuple(th_dets or ()))

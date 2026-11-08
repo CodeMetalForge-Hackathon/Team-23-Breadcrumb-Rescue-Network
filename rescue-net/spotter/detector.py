@@ -164,6 +164,14 @@ class HailoDetector:
         self.person = None
         logging.getLogger("detector").info("Hailo model %s, input %dx%d", path, w, h)
 
+    def infer(self, img):
+        """Run the model on one model-sized BGR/RGB image -> detections in its 0..1 coordinates.
+        Also used for the thermal camera (spotter/thermal_detect.py), from the same thread."""
+        out = self.hailo.run(img)
+        if isinstance(out, dict) and len(out) > 1:          # pose model: raw heads, decode on the CPU
+            return decode_yolov8_pose(out, self.input_hw)
+        return parse_nms(out)
+
     def detect(self):
         request = self.picam2.capture_request()          # main + lores from the same exposure
         try:
@@ -171,11 +179,7 @@ class HailoDetector:
             lores = request.make_array("lores")
         finally:
             request.release()
-        out = self.hailo.run(lores)
-        if isinstance(out, dict) and len(out) > 1:          # pose model: raw heads, decode on the CPU
-            dets = decode_yolov8_pose(out, self.input_hw)
-        else:
-            dets = parse_nms(out)
+        dets = self.infer(lores)
         best = max(dets, key=lambda d: d.score, default=None)
         self.person = None if best is None else (best.x0, best.y0, best.x1, best.y1)   # for --mock-thermal
         return image, dets
