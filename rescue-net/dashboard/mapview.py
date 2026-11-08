@@ -30,6 +30,10 @@ try:
 except Exception:
     suggest_relays = None
 try:
+    from mapping.floorplan import extract as extract_walls   # vector floor plan (claude_03): walls as segments
+except Exception:
+    extract_walls = None
+try:
     from dashboard.cloud import Cloud            # 3D view (codex_02): add_scan(...), snapshot(persons)
 except Exception as e:
     Cloud = None
@@ -39,6 +43,7 @@ PERSON_TTL = 180          # s a person stays on the map after the last sighting
 MERGE_M, MERGE_IDLE = 0.8, 1.0   # a new track id this close to a person not updated for this long = same person
 PNG_EVERY = 1.0           # s between map image renders
 RELAY_EVERY = 3.0
+WALLS_EVERY = 2.0
 NODE_IDS = ["B2", "B1", "BASE"]
 LUT = np.full(256, 22, np.uint8)               # unknown -> near background
 LUT[:100] = 48                                 # free -> dark grey floor
@@ -79,6 +84,7 @@ class MapState:
         self.nodes = {}
         self.relays = []
         self.png, self.png_info, self._png_t, self._relay_t = None, None, 0.0, 0.0
+        self.walls, self._walls_t = [], 0.0
         self.scans, self.last_scan, self.hz = 0, None, 0.0
         self.scan_ok, self.reject_reason = True, None
         self.link = {}                       # lvl, rssi, tilt from the last meta
@@ -143,6 +149,9 @@ class MapState:
             if self.slam is not None and now - self._png_t >= PNG_EVERY:
                 self._png_t = now
                 self._render_png()
+            if self.slam is not None and extract_walls is not None and now - self._walls_t >= WALLS_EVERY:
+                self._walls_t = now
+                self._walls()
             if self.slam is not None and suggest_relays is not None and now - self._relay_t >= RELAY_EVERY:
                 self._relay_t = now
                 self._suggest()
@@ -215,7 +224,7 @@ class MapState:
             self._new_slam()
             self.pose, self.path, self.scan, self.persons, self.relays = (0.0, 0.0, 0.0), [], [], {}, []
             self.nodes = {}                  # new origin: press D2 on each node again (BASE first, at the start)
-            self.png, self.png_info = None, None
+            self.png, self.png_info, self.walls = None, None, []
             if self.cloud is not None:
                 try:
                     self.cloud.clear()
@@ -241,6 +250,15 @@ class MapState:
         v = (self.png_info or {}).get("v", 0) + 1
         self.png = png_gray(crop)
         self.png_info = {"x0": ox + x0 * res, "y0": oy + y0 * res, "res": res, "w": x1 - x0, "h": y1 - y0, "v": v}
+
+    def _walls(self):
+        try:
+            img, origin, res = self.slam.grid()
+            out = extract_walls(img, origin, res) or {}
+            self.walls = [[round(float(v), 2) for v in w[:4]] for w in out.get("walls", [])][:2000]
+        except Exception as e:
+            self.slam_error = f"walls: {e}"
+            log.debug("extract_walls: %s", e)
 
     def _suggest(self):
         try:
@@ -270,7 +288,7 @@ class MapState:
                 "scan_age": None if self.last_scan is None else round(now - self.last_scan, 1),
                 "hz": round(self.hz, 1), "scans": self.scans,
                 "rejected": getattr(self.slam, "rejected", None),
-                "persons": persons, "nodes": dict(self.nodes), "relays": self.relays,
+                "persons": persons, "nodes": dict(self.nodes), "relays": self.relays, "walls": self.walls,
                 "png": self.png_info, "link": self.link,
             }
 
