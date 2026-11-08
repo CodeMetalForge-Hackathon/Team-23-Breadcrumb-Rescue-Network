@@ -380,6 +380,9 @@ def test_level_legs_alone_are_not_down_when_cut():
 
 def test_tilted_rig_uses_box_size_range():
     d = det(0.45, 0.2, 0.55, 0.9)                        # upright, whole body in view
+    d.kpts[15] = d.kpts[16] = (0.5, 0.88, 1)
+    half = det(0.45, 0.2, 0.55, 0.6)                     # upper body only (behind a desk): size says nothing
+    assert observe(half, "C", scan_with([(-5, 5, 0.9)]), cfg(), tilt_deg=3.0).rs == "L"
     s = scan_with([(-5, 5, 0.7)])                         # the scan plane hits a desk at 0.7 m
     assert observe(d, "C", s, cfg(), tilt_deg=3.0).rs == "S"   # 0.7 m < half the size range: not this body
     level = observe(d, "C", scan_with([(-5, 5, 2.2)]), cfg(), tilt_deg=3.0)

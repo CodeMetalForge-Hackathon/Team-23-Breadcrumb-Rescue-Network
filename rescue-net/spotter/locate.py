@@ -71,7 +71,7 @@ def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0, tilt_deg=None):
 
     The LiDAR range is not trusted (box-size range instead, rs "S") when the rig is tilted more than
     lidar_max_tilt_deg (the scan plane then hits the floor or a desk in front of the person), or when the box is
-    whole, not down, and the LiDAR says less than half of what its upright size says (a desk in between).
+    whole (feet visible), not down, and the LiDAR says less than half of what its upright size says (a desk in between).
     No "D" closer than down_min_m: only part of a body that close is in view."""
     hfov_k, yaw_k, dir_k, aspect_hw = CAMERAS[src]
     hfov, yaw, direction = float(cfg[hfov_k]), float(cfg[yaw_k]), int(cfg[dir_k])
@@ -89,7 +89,9 @@ def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0, tilt_deg=None):
     # lidar_body_veto off when the rig sits on the floor: its scan plane then hits people lying down too
     ps, why = classify(det, cfg, x_scale or 1 / aspect_hw, roll_deg, extent, body and cfg["lidar_body_veto"],
                        scale)
-    if r_l is not None and ps != "D" and not cut_by_edge(det) and r_up is not None and r_l < 0.5 * r_up:
+    kpts = getattr(det, "kpts", None)
+    feet = kpts is not None and max(kpts[15][2], kpts[16][2]) >= 0.5      # whole body: its size means something
+    if r_l is not None and ps != "D" and feet and not cut_by_edge(det) and r_up is not None and r_l < 0.5 * r_up:
         r_l = None                                   # LiDAR hits something in front of a whole upright body
     r_s = r_down if ps == "D" else r_up
     # LiDAR far behind what the box size says: it is looking past the person (lying below the scan plane)
