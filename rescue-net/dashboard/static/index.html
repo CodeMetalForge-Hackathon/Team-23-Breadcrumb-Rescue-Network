@@ -921,7 +921,8 @@ function drawPlan() {
     const fresh = freshPerson(p), col = p.ps === "D" ? C.bad : C.person, X = sx(p.x), Y = sy(p.y);
     g.globalAlpha = fresh ? .35 : .25;
     g.fillStyle = col; g.beginPath(); g.arc(X, Y, fresh ? 8 : 3.5, 0, 2 * Math.PI); g.fill();
-    if (fresh) { g.globalAlpha = 1; g.strokeStyle = col; g.lineWidth = 1.5; g.stroke(); }
+    // rq "tilt": first seen while the rig was tilted, range unsure: dashed outline.
+    if (fresh) { g.globalAlpha = 1; g.strokeStyle = col; g.lineWidth = 1.5; if (p.rq === "tilt") g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]); }
     if (String(p.id) === PLAN.highlight) {
       g.globalAlpha = 1; g.strokeStyle = C.info; g.lineWidth = 2;
       g.beginPath(); g.arc(X, Y, 14, 0, 2 * Math.PI); g.stroke();
@@ -1013,7 +1014,7 @@ function renderPlanPeople(persons) {
     row.className = `plan-person${person.ps === "D" ? " down" : ""}${freshPerson(person) ? "" : " old"}${id === PLAN.highlight ? " selected" : ""}`;
     row.children[0].textContent = `P${id} · ${person.ps === "D" ? "Down" : person.ps === "U" ? "Upright" : "Unknown"}`;
     const range = Number.isFinite(person.r) && person.r > 0 ? `${person.r.toFixed(1)} m${person.rs === "S" ? " est." : ""}` : "range unknown";
-    row.children[1].textContent = `${range} · ${person.age == null ? "age unknown" : ageText(person.age)}`;
+    row.children[1].textContent = `${range}${person.rq === "tilt" ? " · range unsure (rig tilted)" : ""} · ${person.age == null ? "age unknown" : ageText(person.age)}`;
     const source = { C: "Camera", T: "Thermal", CT: "Camera + thermal" }[person.src] ||
       (person.src && person.src !== "-" ? person.src : "Source unknown");
     row.children[2].textContent = `${source}${Number.isFinite(person.x) && Number.isFinite(person.y) ? "" : " · unlocated"}`;
