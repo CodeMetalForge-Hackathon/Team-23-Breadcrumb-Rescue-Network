@@ -14,6 +14,7 @@ from spotter.tracker import Tracker, pair_cameras
 
 def cfg(**over):
     c = dict(DEFAULTS)
+    c.update(cam_hfov=66.0, cam_yaw=0.0, cam_dir=1, th_hfov=50.0, th_yaw=0.0, th_dir=1)   # not the calibration
     c.update(over)
     return c
 
