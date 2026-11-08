@@ -7,7 +7,7 @@ Images:
 | File | What it shows |
 |---|---|
 | `media/architecture.png` | System diagram: spotter, SP1, B2, B1, BASE, command post, survivor phone; alert chain and bulk link |
-| `media/dashboard_live_full.png` | Live command-post dashboard (Nov 8, 08:13 EST): floor plan, relay chain, alerts, live panes |
+| `media/dashboard_live_full.png` | Live command-post dashboard (Nov 8, 08:17 EST): floor plan, relay chain, alerts, live panes |
 | `media/dashboard_floorplan_controls.png` | Floor-plan panel with its controls (Fit, Labels, Raw scan, Signal, Mark relay, Pause map) and the People list |
 | `media/dashboard_relay_chain_alerts.png` | Relay chain health (SP1, B2, B1, BASE) and alert cards (PERSON, PHONE) with "Mark handled" |
 | `media/dashboard_live_panes.png` | Camera, thermal and LiDAR panes streamed over the bulk link, with the link rate and level |
