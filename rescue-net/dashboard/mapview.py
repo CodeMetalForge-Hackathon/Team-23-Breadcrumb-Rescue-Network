@@ -44,6 +44,7 @@ except Exception as e:
 
 PERSON_TTL = 180          # s a person stays on the map after the last sighting
 MERGE_M, MERGE_IDLE = 0.8, 1.0   # a new track id this close to a person not updated for this long = same person
+PERSON_TILT_MAX = 10.0    # deg (meta "tilt"): past this, a LiDAR range to a person is not used (same as SLAM)
 PNG_EVERY = 1.0           # s between map image renders
 RELAY_EVERY = 3.0
 RSSI_NODE = "B2"          # the spotter's Wi-Fi RSSI (bulk meta "rssi") is measured to B2's RESCUE-LINK AP
@@ -182,8 +183,14 @@ class MapState:
                     self._rssi_t = now
                     if len(self.rssi_samples) > 4000:
                         self.rssi_samples = self.rssi_samples[::2]
+        # Rig tilted past the SLAM gate: the LiDAR plane hits the desk or floor in front of the person, so a
+        # LiDAR range ("rs": "L") is a wrong, short distance (one person became three dots, 2026-11-08).
+        # Keep that person's last good position instead (a new track gets none until the rig is level).
+        tilt = m.get("tilt")
+        tilted = self.reject_reason == "tilted" or (tilt is not None and tilt > PERSON_TILT_MAX)
         for p in m.get("persons") or []:
-            self.add_person(p.get("id"), p.get("b"), p.get("r"), ps=p.get("ps"), src=p.get("src"),
+            r = None if tilted and p.get("rs") == "L" else p.get("r")
+            self.add_person(p.get("id"), p.get("b"), r, ps=p.get("ps"), src=p.get("src"),
                             c=p.get("c"), rs=p.get("rs"), kp=p.get("kp"), via="bulk", now=now)
 
     def add_alert(self, msg, now=None):
