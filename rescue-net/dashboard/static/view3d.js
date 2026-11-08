@@ -43,6 +43,11 @@
     const cloud = new T.Points(new T.BufferGeometry(), cloudMaterial);
     cloud.frustumCulled = false;
     scene.add(cloud);
+    const surfaceMaterial = cloudMaterial.clone();
+    const surfaceCloud = new T.Points(new T.BufferGeometry(), surfaceMaterial);
+    surfaceCloud.frustumCulled = false;
+    surfaceCloud.visible = false;
+    scene.add(surfaceCloud);
     const pathLine = new T.Line(new T.BufferGeometry(), new T.LineBasicMaterial({ color: 0x58d6eb }));
     pathLine.frustumCulled = false;
     scene.add(pathLine);
@@ -70,7 +75,8 @@
     legend.append(swatch, document.createTextNode("relative height"));
     view.appendChild(legend);
     const tools = document.createElement("div");
-    Object.assign(tools.style, { position: "absolute", right: "5px", top: "5px", display: "flex", gap: "4px" });
+    Object.assign(tools.style, { position: "absolute", right: "5px", top: "5px", display: "flex", gap: "4px",
+      flexWrap: "wrap", justifyContent: "flex-end", maxWidth: "calc(100% - 10px)" });
     function button(text, title, action) {
       const b = document.createElement("button");
       b.type = "button";
@@ -88,6 +94,7 @@
     const target = new T.Vector3(0, 0, 0);
     let azimuth = 0.7, elevation = 0.62, distance = 12;
     let dragging = false, fitted = false, manualCamera = false;
+    let showSurfaces = false, keptPointCount = 0, excludedPointCount = 0;
     let lastData = null, version = null, pathKey = "", peopleKey = "", nodesKey = "";
     let lastSuccess = 0, fetching = false, alive = true, pollTimer, frame;
     const presets = [];
@@ -105,6 +112,14 @@
     button("Fit", "Fit the whole cloud and path; double-click also fits", () => {
       fit(lastData, true); manualCamera = false;
     });
+    const surfaceButton = button("Floor/ceiling", "Show estimated floor/ceiling and risky long returns; some distant walls may also be hidden", () => {
+      showSurfaces = !showSurfaces;
+      surfaceCloud.visible = showSurfaces;
+      surfaceButton.setAttribute("aria-pressed", String(showSurfaces));
+      if (!manualCamera) fit(lastData, true);
+      updateCaption();
+    });
+    surfaceButton.setAttribute("aria-pressed", "false");
 
     function resize() {
       const width = Math.max(1, view.clientWidth), height = Math.max(1, view.clientHeight);
@@ -152,9 +167,11 @@
     function fit(data, immediate) {
       if (!data) return;
       const positions = [];
-      if (data.bounds) positions.push(...data.bounds);
+      const bounds = !showSurfaces && data.surface_flags != null ? data.filtered_bounds : data.bounds;
+      if (bounds) positions.push(...bounds);
       if (Array.isArray(data.pose)) positions.push(data.pose.slice(0, 2));
-      for (const person of data.persons || []) if (located(person)) positions.push([person.x, person.y]);
+      for (const person of data.persons || [])
+        if (located(person) && (person.age == null || person.age < 15)) positions.push([person.x, person.y]);
       for (const node of Object.values(data.nodes || {})) if (located(node)) positions.push([node.x, node.y]);
       for (const point of data.path || []) positions.push(point);
       if (!positions.length) return;
@@ -302,23 +319,39 @@
         if (binary.length !== data.count * 6) throw new Error("incomplete cloud payload");
         const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
         const packed = new DataView(bytes.buffer);
-        const positions = new Float32Array(data.count * 3);
-        const colors = new Float32Array(data.count * 3);
+        const flags = data.surface_flags == null ? new Uint8Array(data.count)
+          : Uint8Array.from(atob(data.surface_flags), (c) => c.charCodeAt(0));
+        if (flags.length !== data.count) throw new Error("incomplete cloud surface flags");
+        keptPointCount = flags.reduce((sum, flag) => sum + (flag === 0 ? 1 : 0), 0);
+        excludedPointCount = data.count - keptPointCount;
+        const positions = new Float32Array(keptPointCount * 3), colors = new Float32Array(keptPointCount * 3);
+        const surfacePositions = new Float32Array(excludedPointCount * 3), surfaceColors = new Float32Array(excludedPointCount * 3);
         const low = new T.Color(0x4187ed), mid = new T.Color(0x42dec9), high = new T.Color(0xf4ba65);
         const color = new T.Color();
+        let keepOffset = 0, surfaceOffset = 0;
         for (let i = 0; i < data.count; i++) {
+          const output = flags[i] ? surfacePositions : positions;
+          const outputColors = flags[i] ? surfaceColors : colors;
+          const offset = flags[i] ? surfaceOffset : keepOffset;
           for (let axis = 0; axis < 3; axis++)
-            positions[i * 3 + axis] = data.origin[axis] + packed.getInt16(i * 6 + axis * 2, true) * data.scale;
-          const height = T.MathUtils.clamp((positions[i * 3 + 2] + 1) / 2, 0, 1);
+            output[offset + axis] = data.origin[axis] + packed.getInt16(i * 6 + axis * 2, true) * data.scale;
+          const height = T.MathUtils.clamp((output[offset + 2] + 1) / 2, 0, 1);
           if (height < 0.5) color.copy(low).lerp(mid, height * 2);
           else color.copy(mid).lerp(high, height * 2 - 1);
-          color.toArray(colors, i * 3);
+          color.toArray(outputColors, offset);
+          if (flags[i]) surfaceOffset += 3;
+          else keepOffset += 3;
         }
         const geometry = new T.BufferGeometry();
         geometry.setAttribute("position", new T.BufferAttribute(positions, 3));
         geometry.setAttribute("color", new T.BufferAttribute(colors, 3));
         cloud.geometry.dispose();
         cloud.geometry = geometry;
+        const surfaceGeometry = new T.BufferGeometry();
+        surfaceGeometry.setAttribute("position", new T.BufferAttribute(surfacePositions, 3));
+        surfaceGeometry.setAttribute("color", new T.BufferAttribute(surfaceColors, 3));
+        surfaceCloud.geometry.dispose();
+        surfaceCloud.geometry = surfaceGeometry;
         version = data.v;
       }
       const nextPath = JSON.stringify(data.path || []);
@@ -338,7 +371,6 @@
       lastData = data;
       if (!manualCamera && (data.count > 0 || (data.path || []).length > 1))
         fit(data, !fitted);
-      view.dataset.points = String(data.count);
       view.dataset.people = String((data.persons || []).filter(located).length);
       updateCaption();
     }
@@ -353,16 +385,22 @@
       const people = allPeople.filter((p) => p.age == null || p.age < 15), down = people.filter((p) => p.ps === "D").length;
       const unlocated = people.filter((p) => !located(p)).length;
       const stale = error || lastData.scan_age == null || lastData.scan_age > 3 || Date.now() - lastSuccess > 3500;
-      let status = `${lastData.count.toLocaleString()} pts`;
+      const visible = showSurfaces ? lastData.count : keptPointCount;
+      view.dataset.points = String(visible);
+      view.dataset.totalPoints = String(lastData.count);
+      view.dataset.surfaces = String(showSurfaces);
+      let status = `${visible.toLocaleString()}${!showSurfaces && excludedPointCount ? `/${lastData.count.toLocaleString()}` : ""} pts`;
       if (people.length) status += ` | ${people.length} live${down ? `, ${down} down` : ""}`;
       if (unlocated) status += ` | ${unlocated} unlocated`;
       status += stale ? " | scan stale" : lastData.scan_ok === false ? " | scan rejected" : "";
       caption.textContent = `3D LiDAR: ${status}`;
       caption.title = `${caption.textContent}. ${lastData.tilt ? "IMU tilt relative to the level reference" : "Flat scan: no valid tilt sample"}. ` +
         `${allPeople.length - people.length} earlier sightings are faded dots. ` +
+        `${excludedPointCount} estimated floor/ceiling or risky long returns ${showSurfaces ? "included" : "hidden"}; distant walls may also be hidden. ` +
         "Heights are relative to the LiDAR plane; person heights are schematic. Drag to orbit, scroll to zoom.";
       caption.classList.toggle("stale", stale || lastData.scan_ok === false);
       cloudMaterial.opacity = stale ? 0.38 : lastData.scan_ok === false ? 0.58 : 0.88;
+      surfaceMaterial.opacity = cloudMaterial.opacity;
     }
 
     async function poll() {
