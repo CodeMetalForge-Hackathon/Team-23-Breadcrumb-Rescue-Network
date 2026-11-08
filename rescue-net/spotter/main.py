@@ -150,6 +150,10 @@ def main():
             tracker.merge_deg = cfg["track_merge_deg"]
             tracker.cam_fov = (cfg["cam_yaw"], cfg["cam_hfov"] / 2 - 3)
             tracker.need_thermal_for_down = th_det is not None and bool(cfg.data.get("down_needs_thermal", True))
+            try:
+                tracker.lit = float(image[::16, ::16].mean()) >= float(cfg.data.get("lit_luma", 40))
+            except Exception:                              # no image (camera hiccup): assume dark
+                tracker.lit = False
             tracker.update(cam_obs, th_obs, now)
             shared["persons"] = tracker.persons(now)
             if view:

@@ -400,3 +400,15 @@ def test_thermal_only_without_keypoints_is_dropped_and_duplicates_merge():
     for i in range(4):
         tr.update([], [T(345, real), T(346, real, 50), T(13, blob)], i * 0.1)
     assert [round(t.b) for t in tr.tracks] == [345]
+
+
+def test_lit_scene_drops_thermal_only_in_camera_view_and_far_pairs_split():
+    tr = Tracker(cam_fov=(0.0, 21.0))
+    tr.lit = True
+    for i in range(4):
+        tr.update([ob(10, r=0.8)], [ob(9, r=2.6, src="T"), ob(60, r=2.0, src="T")], i * 0.1)
+    assert sorted((t.src(0.3), round(t.b)) for t in tr.tracks) == [("C", 10), ("T", 60)]
+    tr2 = Tracker(cam_fov=(0.0, 21.0))
+    for i in range(4):
+        tr2.update([], [ob(9, r=2.6, src="T")], i * 0.1)
+    assert [t.src(0.3) for t in tr2.tracks] == ["T"]          # dark: thermal-only counts

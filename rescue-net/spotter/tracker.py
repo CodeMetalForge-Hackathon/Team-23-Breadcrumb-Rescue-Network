@@ -33,13 +33,16 @@ def dedupe_obs(obs, deg=4.0, m=0.5):
     return out
 
 
-def pair_cameras(cam_obs, th_obs, merge_deg):
+def pair_cameras(cam_obs, th_obs, merge_deg, max_dr=1.0):
     """Pi-camera and thermal observations of the same person (bearings within merge_deg) -> one "CT" obs."""
     pairs = sorted((abs(angdiff(c.b, t.b)), i, j) for i, c in enumerate(cam_obs) for j, t in enumerate(th_obs))
     used_c, used_t, out = set(), set(), []
     for diff, i, j in pairs:
         if diff > merge_deg or i in used_c or j in used_t:
             continue
+        c, t = cam_obs[i], th_obs[j]
+        if c.rs == "L" and t.rs == "L" and abs(c.r - t.r) > max_dr:
+            continue                                  # same bearing, different distance: not the same person
         used_c.add(i)
         used_t.add(j)
         c, t = cam_obs[i], th_obs[j]
@@ -104,6 +107,7 @@ class Tracker:
         self.dedupe_deg, self.dedupe_s = dedupe_deg, dedupe_s
         self.need_thermal_for_down, self.thermal_seen_s = need_thermal_for_down, thermal_seen_s
         self.min_th_kp = 3
+        self.lit = False                   # set per frame from the RGB image brightness
         self.sent = deque()                # (time, bearing, down?, track id) of the alerts sent
         self.tracks = []
         self._next = 1
@@ -121,6 +125,10 @@ class Tracker:
         # thermal only, almost no keypoints: warm clutter or a reflection, not a person (the RGB camera, or
         # pose keypoints on the thermal image, are needed)
         obs = [o for o in obs if not (o.src == "T" and kp_count(o.det) < self.min_th_kp)]
+        # lit scene: the RGB camera would see a real person in its view, so a thermal-only one there is a
+        # reflection (glossy whiteboards and windows mirror long-wave IR); in the dark thermal-only counts
+        if self.lit and self.cam_fov:
+            obs = [o for o in obs if not (o.src == "T" and abs(angdiff(o.b, self.cam_fov[0])) <= self.cam_fov[1])]
         cand = []
         for ti, t in enumerate(self.tracks):
             for oi, o in enumerate(obs):
