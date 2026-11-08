@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Client for board_hub.py running on the laptop. Usable by any agent on jump (Claude, Codex, Kiro).
+#   hub boards                 list boards (label, COM port, last serial line)
+#   hub log CP [n]             last n serial lines of CP (default 40)
+#   hub tail CP                follow CP serial (Ctrl-C to stop)
+#   hub send SP1 'test'        write one line to a board's serial
+#   hub flash B3 file.bin      flash ESP32 merged .bin (or .uf2 for RP2040)
+#   hub deploy B3|B2|CP|SP1    compile on jump from firmware/ and flash that node
+#   hub reset B2               reset an ESP32
+#   hub label COM11 B2         name a port by hand
+#   hub update                 push tools/board_hub.py to the laptop (hub restarts in ~3 s)
+#                              KEEP admin_update in board_hub.py or this endpoint disappears
+#   hub dash                   push tools/dashboard.html (backup dashboard at http://127.0.0.1:8765/dash?token=...)
+set -euo pipefail
+HUB=${BOARD_HUB:-http://100.115.103.120:8765}
+TOKEN=${BOARD_HUB_TOKEN:-$(cat ~/.config/board_hub_token)}
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+c() { curl -sS -H "X-Token: $TOKEN" "$@"; }
+pp() { python3 -c 'import sys,json; d=json.load(sys.stdin)
+if "lines" in d: [print(f"{l[1]} {l[2]}") for l in d["lines"]]
+elif "output" in d: print(("OK" if d["ok"] else "FAILED")); print(d["output"])
+else: print(json.dumps(d, indent=1, ensure_ascii=False))'; }
+cmd=${1:-boards}; shift || true
+case $cmd in
+  boards) c "$HUB/boards" | pp ;;
+  log)    c "$HUB/log/$1?n=${2:-40}" | pp ;;
+  tail)   seq=$(c "$HUB/log/$1?n=0" | python3 -c 'import sys,json;print(json.load(sys.stdin)["seq"])')
+          while true; do
+            r=$(c "$HUB/log/$1?since=$seq&wait=25") || { sleep 2; continue; }
+            echo "$r" | python3 -c 'import sys,json;[print(f"{l[1]} {l[2]}") for l in json.load(sys.stdin).get("lines",[])]'
+            seq=$(echo "$r" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("seq",0))')
+          done ;;
+  send)   c -X POST --data-binary "$2" "$HUB/send/$1" | pp ;;
+  flash)  kind=esp32; [[ $2 == *.uf2 ]] && kind=rp2040
+          c -X POST -H "Content-Type: application/octet-stream" --data-binary @"$2" --max-time 300 "$HUB/flash/$1?kind=$kind" | pp ;;
+  reset)  c -X POST "$HUB/reset/$1" --max-time 120 | pp ;;
+  label)  c -X POST "$HUB/label?port=$1&name=$2" | pp ;;
+  update) f="$ROOT/tools/board_hub.py"; grep -q "def admin_update" "$f" || { echo "refusing: admin_update missing"; exit 1; }
+          python3 -m py_compile "$f"; sha=$(sha256sum "$f" | cut -d" " -f1)
+          c -X POST -H "Content-Type: application/octet-stream" --data-binary @"$f" "$HUB/admin/update?sha=$sha" | pp
+          sleep 5; c "$HUB/boards" >/dev/null && echo "hub back up" ;;
+  dash)   f="$ROOT/tools/dashboard.html"; sha=$(sha256sum "$f" | cut -d" " -f1)
+          c -X POST -H "Content-Type: application/octet-stream" --data-binary @"$f" "$HUB/admin/file?name=dashboard.html&sha=$sha" | pp
+          echo "open on the laptop: http://127.0.0.1:8765/dash?token=<token>" ;;
+  deploy) node=$1
+          if [[ $node == SP1 ]]; then
+            arduino-cli compile --fqbn rp2040:rp2040:adafruit_feather_rfm --build-path "$ROOT/firmware/lora_bridge/build" "$ROOT/firmware/lora_bridge" | tail -2
+            "$0" flash SP1 "$ROOT/firmware/lora_bridge/build/lora_bridge.ino.uf2"
+          else
+            b="$ROOT/firmware/breadcrumb_espnow/build/$node"
+            arduino-cli compile --fqbn esp32:esp32:adafruit_feather_esp32s3_reversetft \
+              --build-property "compiler.cpp.extra_flags=-DNODE_ID=\"$node\"" --build-path "$b" "$ROOT/firmware/breadcrumb_espnow" | tail -2
+            "$0" flash "$node" "$b/breadcrumb_espnow.ino.merged.bin"
+          fi ;;
+  *) sed -n '2,13p' "$0"; exit 1 ;;
+esac

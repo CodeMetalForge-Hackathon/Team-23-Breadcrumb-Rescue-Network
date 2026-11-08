@@ -1,0 +1,125 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rescue Command Post</title>
+<style>
+:root{--bg:#0f1115;--card:#1a1d24;--fg:#e8e8e8;--mute:#8a8f98;--green:#2ecc71;--amber:#f39c12;--grey:#555;--red:#e53935;--yellow:#f1c40f;--orange:#ff7a2f;--blue:#4aa3ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+header{display:flex;align-items:baseline;gap:16px;padding:14px 20px;border-bottom:1px solid #262a33}
+header h1{margin:0;font-size:22px}
+header .st{color:var(--mute);font-size:14px}
+main{display:grid;grid-template-columns:1fr 380px;gap:16px;padding:16px 20px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.chain{display:flex;align-items:center;gap:0;margin-bottom:16px;flex-wrap:wrap}
+.node{min-width:120px;padding:12px 14px;border-radius:12px;background:var(--card);border:3px solid var(--grey);text-align:center}
+.node b{display:block;font-size:22px}
+.node span{font-size:12px;color:var(--mute)}
+.node.g{border-color:var(--green)}.node.a{border-color:var(--amber)}.node.x{border-color:var(--grey);opacity:.6}
+.link{flex:0 0 60px;text-align:center;color:var(--mute);font-size:11px;border-top:2px dashed #444;margin:0 4px;padding-top:2px}
+h2{font-size:15px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em;margin:18px 0 8px}
+.card{background:var(--card);border-left:6px solid var(--grey);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.card.SOS{border-color:var(--red)}.card.PERSON{border-color:var(--yellow)}.card.HEAT{border-color:var(--orange)}.card.HAZARD{border-color:#b05cff}
+.card.done{opacity:.45}
+.card .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.card .ty{font-weight:800;font-size:18px}
+.card.SOS .ty{color:var(--red)}.card.PERSON .ty{color:var(--yellow)}.card.HEAT .ty{color:var(--orange)}
+.card .msg{font-size:20px;margin:6px 0}
+.card .meta{color:var(--mute);font-size:13px}
+.btn{margin-top:8px;margin-right:8px;padding:8px 14px;border-radius:8px;border:0;font-weight:700;cursor:pointer;font-size:14px}
+.ack{background:var(--red);color:#fff}.ack[disabled]{background:#2d6a3e;cursor:default}
+.hdl{background:#333;color:#ddd}
+.phone{background:var(--card);border-radius:10px;padding:12px 14px;margin-bottom:10px;border-left:6px solid var(--blue)}
+.phone .big{font-size:28px;font-weight:800}
+.phone.near{border-color:var(--red);animation:pulse 1s infinite alternate}
+@keyframes pulse{from{background:#3a1416}to{background:var(--card)}}
+pre{background:#090a0d;color:#9aa;font-size:11px;padding:8px;border-radius:8px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+.empty{color:var(--mute);font-style:italic}
+</style></head><body>
+<header><h1>&#x1F6A8; Rescue Command Post</h1><span class="st" id="st">connecting&hellip;</span></header>
+<main>
+<section>
+  <div class="chain" id="chain"></div>
+  <h2>Alerts</h2>
+  <div id="alerts"><p class="empty">No alerts yet.</p></div>
+</section>
+<aside>
+  <h2>Phones heard (Bluetooth)</h2>
+  <div id="phones"><p class="empty">No phone reports yet.</p></div>
+  <h2>Raw messages</h2>
+  <pre id="raw"></pre>
+</aside>
+</main>
+<script>
+var TOK=new URLSearchParams(location.search).get("token")||"";
+var HDR={"X-Token":TOK};
+var ORDER=["SP1","B2","B1","BASE"], LINKS=["LoRa","ESP-NOW","ESP-NOW"];
+var nodes={}, alerts=[], phones={}, raw=[], seq=-1;
+var store={}; try{store=JSON.parse(localStorage.getItem("cp_state")||"{}")}catch(e){}
+function save(){try{localStorage.setItem("cp_state",JSON.stringify(store))}catch(e){}}
+function tsOf(hms){var p=hms.split(":"),d=new Date();d.setHours(+p[0],+p[1],+p[2],0);if(d-Date.now()>60000)d.setDate(d.getDate()-1);return d.getTime()}
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function ago(t){var s=Math.round((Date.now()-t)/1000);return s<60?s+"s ago":Math.round(s/60)+" min ago"}
+function route(m){var r=[m.src].concat(m.rt||[]);r.push("BASE");return r.join(" → ")}
+function seen(id,t,q){if(!id)return;var n=nodes[id]||(nodes[id]={});if(!n.t||t>=n.t){n.t=t;if(q!=null)n.q=q}}
+function handle(ts,text){
+  raw.push(ts+" "+text); if(raw.length>80)raw.shift();
+  if(text[0]!=="{")return;
+  var m;try{m=JSON.parse(text)}catch(e){return}
+  var t=tsOf(ts);
+  seen("BASE",t); seen(m.src,t);
+  (m.rt||[]).forEach(function(h){seen(h,t)});
+  if(m.t==="PHONE"){phones[m.z||m.src]={m:m,t:t};return}
+  if(["SOS","PERSON","HEAT","HAZARD"].indexOf(m.t)<0)return;
+  if(m.t!=="SOS"){ // fold repeats of the same kind from the same zone within 60 s
+    for(var i=alerts.length-1;i>=0;i--){var a=alerts[i];
+      if(a.m.t===m.t&&a.m.z===m.z&&!store[a.m.id+"h"]&&t-a.t<60000){a.count++;a.t=t;a.m=Object.assign({},m,{id:a.m.id});return}}
+  }
+  if(alerts.some(function(a){return a.m.id===m.id}))return;
+  alerts.push({m:m,t:t,count:1});
+}
+function render(){
+  var c="";ORDER.forEach(function(id,i){var n=nodes[id],cls="x",info="never heard";
+    if(n&&n.t){var age=(Date.now()-n.t)/1000;cls=age<20?"g":age<45?"a":"x";info=ago(n.t)+(n.q!=null?" · "+n.q+" dBm":"")}
+    c+='<div class="node '+cls+'"><b>'+id+'</b><span>'+info+'</span></div>';
+    if(i<LINKS.length)c+='<div class="link">'+LINKS[i]+'</div>'});
+  document.getElementById("chain").innerHTML=c;
+  var list=alerts.slice().sort(function(a,b){var ha=!!store[a.m.id+"h"],hb=!!store[b.m.id+"h"];if(ha!==hb)return ha?1:-1;
+    var pa=a.m.t==="SOS"?0:1,pb=b.m.t==="SOS"?0:1;if(pa!==pb)return pa-pb;return b.t-a.t});
+  var h="";list.forEach(function(a){var m=a.m,done=!!store[m.id+"h"],acked=!!store[m.id+"a"];
+    var body="";
+    if(m.t==="SOS")body='<div class="msg">“'+esc(m.msg)+'”</div>';
+    else if(m.t==="PERSON")body='<div class="msg">Person, '+esc(m.c)+'% confident · thermal '+(m.th?"✔ confirmed":"✘ not confirmed")+'</div>';
+    else if(m.t==="HEAT")body='<div class="msg">Warm spot, no person seen'+(m.c!=null?" ("+esc(m.c)+"%)":"")+'</div>';
+    else body='<div class="msg">'+esc(m.msg||m.t)+'</div>';
+    h+='<div class="card '+m.t+(done?" done":"")+'"><div class="top"><span class="ty">'+m.t+' · zone '+esc(m.z||m.src)+'</span><span class="meta">'+ago(a.t)+(a.count>1?" · ×"+a.count:"")+'</span></div>'+body+
+      '<div class="meta">route: '+esc(route(m))+'</div>';
+    if(m.t==="SOS")h+='<button class="btn ack" '+(acked?"disabled":"")+' onclick="ack(\''+esc(m.id)+'\')">'+(acked?"✔ Survivor notified":"Acknowledge → tell survivor")+'</button>';
+    if(!done)h+='<button class="btn hdl" onclick="hdl(\''+esc(m.id)+'\')">Mark handled</button>';
+    h+='</div>'});
+  document.getElementById("alerts").innerHTML=h||'<p class="empty">No alerts yet.</p>';
+  var p="";Object.keys(phones).forEach(function(z){var x=phones[z],m=x.m,near=(m.nr||0)>0&&Date.now()-x.t<25000;
+    p+='<div class="phone'+(near?" near":"")+'"><div class="top"><b>near '+esc(z)+'</b> <span class="meta">'+ago(x.t)+'</span></div>'+
+      (near?'<div class="big">📱 '+m.nr+' phone'+(m.nr>1?"s":"")+' right next to '+esc(z)+'</div>':"")+
+      '<div>'+esc(m.n)+' devices · strongest '+esc(m.rssi)+' dBm · '+esc(m.ap)+' Apple</div></div>'});
+  document.getElementById("phones").innerHTML=p||'<p class="empty">No phone reports yet.</p>';
+  var r=document.getElementById("raw");r.textContent=raw.slice(-40).join("\n");r.scrollTop=r.scrollHeight;
+}
+function ack(id){
+  fetch("/send/BASE",{method:"POST",headers:HDR,body:JSON.stringify({t:"ACK",ref:id,msg:"Help is on the way"})})
+   .then(function(r){if(r.ok){store[id+"a"]=1;save();render()}else alert("ACK failed: BASE not connected?")})
+   .catch(function(){alert("ACK failed")});
+}
+function hdl(id){store[id+"h"]=1;save();render()}
+function st(s){document.getElementById("st").textContent=s}
+function poll(){
+  var url=seq<0?"/log/BASE?n=400":"/log/BASE?since="+seq+"&wait=20";
+  fetch(url,{headers:HDR}).then(function(r){if(!r.ok)throw r.status;return r.json()}).then(function(j){
+    if(seq>=0&&j.seq<seq){seq=-1;setTimeout(poll,500);return}  // BASE re-plugged: reload its buffer
+    j.lines.forEach(function(l){if(l[0]>seq||seq<0)handle(l[1],l[2])});
+    seq=j.seq; st("BASE on "+j.port+" · live"); render(); setTimeout(poll,50);
+  }).catch(function(e){st(e===403?"wrong token":"BASE not connected, retrying…");setTimeout(poll,2000)});
+}
+setInterval(render,2000);
+poll();
+</script>
+</body></html>

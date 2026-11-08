@@ -1,0 +1,8 @@
+# Laptop: pip install -r requirements.txt
+# Pi: python3 -m venv --system-site-packages .venv  (picamera2, Hailo, OpenCV come from apt), then
+#     pip install pyserial flask pytest adafruit-blinka adafruit-circuitpython-mlx90640
+pyserial>=3.5
+flask>=3.0
+numpy>=1.24
+pytest>=7
+opencv-python-headless>=4.8   # debug view only; on the Pi use apt's python3-opencv instead

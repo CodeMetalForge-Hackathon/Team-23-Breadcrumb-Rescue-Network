@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="760" viewBox="0 0 1400 760" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f6fb2"/></marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker>
+  </defs>
+  <rect width="1400" height="760" fill="#ffffff"/>
+  <text x="40" y="48" font-size="28" font-weight="bold" fill="#1b1b1b">Breadcrumb Rescue Network: architecture</text>
+  <text x="40" y="76" font-size="16" fill="#555">No GPS, no cell, no venue Wi-Fi. Everything travels over our own relays.</text>
+
+  <!-- Spotter -->
+  <rect x="40" y="110" width="300" height="330" rx="12" fill="#f4f6f8" stroke="#34495e" stroke-width="2"/>
+  <text x="60" y="142" font-size="20" font-weight="bold">Handheld spotter</text>
+  <text x="60" y="166" font-size="14" fill="#444">Pi 5 + AI HAT+ (Hailo-8, 26 TOPS)</text>
+  <g font-size="14" fill="#222">
+    <text x="60" y="198">RGB camera: YOLOv8-pose on Hailo</text>
+    <text x="60" y="222">USB thermal camera: pose in the dark</text>
+    <text x="60" y="246">RPLIDAR C1: 360 deg scans, 10 Hz</text>
+    <text x="60" y="270">MMA7660 accelerometer: tilt gate</text>
+    <text x="60" y="302">Person tracks: bearing (camera)</text>
+    <text x="60" y="322">+ range (LiDAR), posture down/up</text>
+    <text x="60" y="354">Bulk scheduler: degrades with RSSI</text>
+  </g>
+  <rect x="60" y="376" width="260" height="48" rx="8" fill="#fdecea" stroke="#c0392b"/>
+  <text x="74" y="398" font-size="15" font-weight="bold" fill="#c0392b">SP1  Feather RP2040 RFM95</text>
+  <text x="74" y="416" font-size="13" fill="#c0392b">USB to LoRa, self-heal reboot, watchdog</text>
+
+  <!-- Relays -->
+  <rect x="460" y="150" width="230" height="170" rx="12" fill="#f4f6f8" stroke="#34495e" stroke-width="2"/>
+  <text x="478" y="180" font-size="20" font-weight="bold">B2  gateway relay</text>
+  <g font-size="14" fill="#222">
+    <text x="478" y="206">ESP32-S3 + RFM95W LoRa</text>
+    <text x="478" y="228">BLE: counts phones nearby</text>
+    <text x="478" y="250">hidden AP RESCUE-LINK</text>
+    <text x="478" y="272">(UDP in for bulk data)</text>
+    <text x="478" y="300" fill="#555">D0 test / D1 topology / D2 MARK</text>
+  </g>
+
+  <rect x="790" y="150" width="230" height="170" rx="12" fill="#f4f6f8" stroke="#34495e" stroke-width="2"/>
+  <text x="808" y="180" font-size="20" font-weight="bold">B1  relay + portal</text>
+  <g font-size="14" fill="#222">
+    <text x="808" y="206">ESP32-S3, ESP-NOW flood relay</text>
+    <text x="808" y="228">Wi-Fi RESCUE-TEAM-NEARBY</text>
+    <text x="808" y="250">captive portal: survivor SOS</text>
+    <text x="808" y="272">"Received by rescuers" ACK</text>
+    <text x="808" y="300" fill="#555">D2 MARK registers it on the map</text>
+  </g>
+
+  <rect x="1110" y="150" width="250" height="110" rx="12" fill="#f4f6f8" stroke="#34495e" stroke-width="2"/>
+  <text x="1128" y="180" font-size="20" font-weight="bold">BASE</text>
+  <g font-size="14" fill="#222">
+    <text x="1128" y="206">ESP32-S3 on laptop USB</text>
+    <text x="1128" y="228">JSON alerts + "$B" bulk lines</text>
+  </g>
+
+  <!-- Command post -->
+  <rect x="1060" y="380" width="300" height="300" rx="12" fill="#eef5fb" stroke="#1f6fb2" stroke-width="2"/>
+  <text x="1080" y="412" font-size="20" font-weight="bold">Command post (laptop)</text>
+  <text x="1080" y="436" font-size="14" fill="#444">board hub + dashboard :5050</text>
+  <g font-size="14" fill="#222">
+    <text x="1080" y="468">Alerts ranked: person down first</text>
+    <text x="1080" y="492">Relay chain health (HB, RSSI, hops)</text>
+    <text x="1080" y="516">SOS messages + reply (ACK)</text>
+    <text x="1080" y="548">Floor plan: 2D SLAM from LiDAR,</text>
+    <text x="1080" y="568">walked path, people, relay nodes</text>
+    <text x="1080" y="592">Suggested next relay spots</text>
+    <text x="1080" y="624">Live panes: camera, thermal, LiDAR</text>
+    <text x="1080" y="648">3D point cloud view</text>
+  </g>
+
+  <!-- Survivor phone -->
+  <rect x="790" y="420" width="200" height="80" rx="12" fill="#fff" stroke="#555" stroke-dasharray="6 4" stroke-width="2"/>
+  <text x="808" y="452" font-size="16" font-weight="bold">Survivor's phone</text>
+  <text x="808" y="476" font-size="14" fill="#444">joins Wi-Fi, sends SOS</text>
+  <path d="M890,420 L890,326" stroke="#555" stroke-width="2.5" fill="none" marker-end="url(#ag)"/>
+
+  <!-- Alert chain (red) -->
+  <path d="M320,400 C400,400 400,250 455,250" stroke="#c0392b" stroke-width="3.5" fill="none" marker-end="url(#ar)"/>
+  <text x="352" y="440" font-size="14" fill="#c0392b" font-weight="bold">LoRa 915 MHz</text>
+  <path d="M690,190 L785,190" stroke="#c0392b" stroke-width="3.5" fill="none" marker-end="url(#ar)"/>
+  <text x="737" y="170" font-size="13" fill="#c0392b" font-weight="bold" text-anchor="middle">ESP-NOW</text><text x="737" y="184" font-size="12" fill="#c0392b" text-anchor="middle">flood</text>
+  <path d="M1020,190 L1105,190" stroke="#c0392b" stroke-width="3.5" fill="none" marker-end="url(#ar)"/>
+  <text x="1062" y="180" font-size="12" fill="#c0392b" font-weight="bold" text-anchor="middle">ESP-NOW</text>
+
+  <!-- Bulk link (blue) -->
+  <path d="M340,300 C400,300 410,290 455,290" stroke="#1f6fb2" stroke-width="3.5" stroke-dasharray="10 6" fill="none" marker-end="url(#ab)"/>
+  <text x="350" y="284" font-size="13" fill="#1f6fb2" font-weight="bold">Wi-Fi UDP</text>
+  <path d="M690,280 L785,280" stroke="#1f6fb2" stroke-width="3.5" stroke-dasharray="10 6" fill="none" marker-end="url(#ab)"/>
+  <text x="737" y="300" font-size="12" fill="#1f6fb2" font-weight="bold" text-anchor="middle">ESP-NOW</text><text x="737" y="314" font-size="12" fill="#1f6fb2" text-anchor="middle">12 Mbps</text>
+  <path d="M1020,240 L1105,240" stroke="#1f6fb2" stroke-width="3.5" stroke-dasharray="10 6" fill="none" marker-end="url(#ab)"/>
+
+  <path d="M1235,260 L1235,375" stroke="#555" stroke-width="3" fill="none" marker-end="url(#ag)"/>
+  <text x="1245" y="324" font-size="13" fill="#555">USB serial</text>
+
+  <!-- ACK back -->
+  <path d="M1105,215 L1025,215" stroke="#555" stroke-width="1.8" stroke-dasharray="3 4" fill="none" marker-end="url(#ag)"/>
+  <text x="1062" y="262" font-size="12" fill="#555" text-anchor="middle">SOS ACK</text>
+
+  <!-- Legend -->
+  <g transform="translate(40,500)">
+    <rect width="700" height="200" rx="12" fill="#fafafa" stroke="#ccc"/>
+    <line x1="24" y1="36" x2="84" y2="36" stroke="#c0392b" stroke-width="3.5"/>
+    <text x="96" y="41" font-size="15"><tspan font-weight="bold">Alert chain</tspan>: small JSON (&lt;200 B), flooded by every relay,</text>
+    <text x="96" y="61" font-size="15">de-dup + hop limit. If a relay goes silent, the flood takes another path.</text>
+    <line x1="24" y1="96" x2="84" y2="96" stroke="#1f6fb2" stroke-width="3.5" stroke-dasharray="10 6"/>
+    <text x="96" y="101" font-size="15"><tspan font-weight="bold">Bulk link</tspan>: about 420 kbps. LiDAR 10 Hz + people/meta first,</text>
+    <text x="96" y="121" font-size="15">pictures get the rest. Weak signal: pictures every 4 s, map keeps flowing.</text>
+    <text x="24" y="160" font-size="15"><tspan font-weight="bold">Self-heal</tspan>: SP1 reboots itself after 40 s of USB silence;</text>
+    <text x="24" y="180" font-size="15">the laptop hub reopens a stalled serial port.</text>
+  </g>
+</svg>

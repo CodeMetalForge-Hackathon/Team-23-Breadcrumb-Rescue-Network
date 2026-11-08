@@ -1,0 +1,1149 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rescue Net Command Post</title>
+<style>
+:root {
+  --bg: #0b0d10; --panel: #14181d; --line: #2c333c; --fg: #f4f6f8; --muted: #a9b2bc; --badge-fg: #0b0d10;
+  --ok: #22c55e; --warn: #f5a524; --off: #59626d; --bad: #ef4444; --info: #4da3ff;
+  --sos: #ff4d4d;    --sos-bg: #3b1013;
+  --person: #ffb020; --person-bg: #33270a;
+  --phone: #4da3ff;  --phone-bg: #0d2440;
+  --heat: #ff7a1a;   --heat-bg: #3a1e08;
+  --hazard: #c084fc; --hazard-bg: #2b1340;
+  --other: #9ca3af;  --other-bg: #1f2329;
+  --signal-good: #51d5ad; --signal-fair: #e4b857; --signal-poor: #ef6f83;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #eef0f3; --panel: #ffffff; --line: #cdd3da; --fg: #0b0d10; --muted: #4b5563; --badge-fg: #ffffff;
+  --ok: #16a34a; --warn: #d97706; --off: #9aa3ad; --bad: #dc2626; --info: #1d6fd8;
+  --sos: #d90429;    --sos-bg: #ffe3e6;
+  --person: #b45309; --person-bg: #fff1d6;
+  --phone: #1d6fd8;  --phone-bg: #e2efff;
+  --heat: #c2410c;   --heat-bg: #ffe6d5;
+  --hazard: #7e22ce; --hazard-bg: #f1e4ff;
+  --other: #6b7280;  --other-bg: #eef0f2;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 20px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  display: flex; flex-direction: column;
+}
+button {
+  font: inherit; font-size: 18px; font-weight: 700; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  border: 2px solid var(--fg); background: transparent; color: var(--fg);
+}
+button:hover { background: var(--fg); color: var(--bg); }
+button:disabled { opacity: .5; cursor: default; }
+
+header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; flex: 0 0 auto;
+  min-height: 60px; padding: 10px 16px; background: var(--panel); border-bottom: 2px solid var(--line);
+}
+h1 { font-size: 24px; margin: 0; white-space: nowrap; flex: 0 0 auto; }
+h1 span { color: var(--muted); font-weight: 600; }
+#counts { display: flex; gap: 5px; flex-wrap: nowrap; flex: 0 0 auto; }
+.count { padding: 4px 9px; border-radius: 999px; background: var(--c); color: var(--badge-fg); font-weight: 700; font-size: 14px; white-space: nowrap; }
+.count.zero { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 2px var(--line); }
+.spacer { flex: 1; }
+header .spacer { min-width: 0; }
+header button { flex: 0 0 auto; font-size: 14px; padding: 6px 10px; white-space: nowrap; }
+#link { min-width: 0; max-width: 300px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto;
+        font-weight: 700; font-size: 14px; padding: 6px 10px; border-radius: 999px; border: 2px solid currentColor; white-space: nowrap; }
+#link.good { color: var(--ok); } #link.bad { color: var(--bad); } #link.info { color: var(--info); }
+#sound.off { border-color: var(--warn); color: var(--warn); }
+#clock { flex: 0 0 auto; font-size: 25px; line-height: 1; white-space: nowrap; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr);
+       grid-template-rows: minmax(0, 1fr) auto; gap: 12px; padding: 12px; }
+section.plan { grid-column: 1; grid-row: 1; }
+section.live { grid-column: 1; grid-row: 2; padding: 10px 14px; }
+section.side { grid-column: 2; grid-row: 1 / span 2; }
+section.plan, section.live { overflow: hidden; }
+section.plan h2 { display: flex; gap: 12px; align-items: baseline; flex: 0 0 auto; white-space: nowrap; }
+#plan-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 10px; }
+#planwrap { min-width: 0; min-height: 0; position: relative; }
+#plan { position: absolute; inset: 0; width: 100%; height: 100%; background: #0d1014; border-radius: 8px; cursor: grab; touch-action: none; }
+#plan-tools { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;
+              font-size: 12px; color: var(--muted); }
+#plan-tools button { flex: 0 0 auto; font-size: 12px; line-height: 1.2; padding: 5px 8px; border-width: 1px; border-radius: 5px; }
+#plan-tools #plan-reset { margin-left: 4px; color: var(--muted); border-color: var(--line); }
+#plan-tools button.active { border-color: var(--info); color: var(--info); }
+#plan-key { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; min-height: 15px;
+            margin-bottom: 7px; font-size: 11px; color: var(--muted); }
+#plan-key .plan-hint { margin-left: auto; white-space: nowrap; }
+#plan-zone-key { flex: 0 0 auto; margin: 0 0 7px; font-size: 11px; color: var(--muted); }
+#plan-signal-key { display: flex; align-items: center; gap: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#plan-signal-key span { display: inline-flex; align-items: center; gap: 4px; }
+#plan-signal-key i { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                     border: 1px solid #0d1014; box-shadow: 0 0 0 1px var(--muted); }
+#plan-signal-caption { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+#plan-people { min-width: 0; min-height: 0; overflow-y: auto; border-left: 1px solid var(--line); padding-left: 10px; }
+#plan-people h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+#plan-person-list { display: flex; flex-direction: column; gap: 5px; }
+.plan-person { display: block; flex: 0 0 auto; width: 100%; padding: 5px 7px; text-align: left; border: 1px solid var(--line); border-left: 3px solid var(--person); border-radius: 5px; font-size: 11px; line-height: 1.4; font-weight: 400; }
+.plan-person strong, .plan-person span { display: block; }
+.plan-person strong { font-size: 12px; }
+.plan-person span { color: var(--muted); }
+.plan-person.down { border-left-color: var(--sos); }
+.plan-person.old { opacity: .5; }
+.plan-person.selected, .plan-person:hover { opacity: 1; border-color: var(--info); background: var(--bg); color: var(--fg); }
+#plan-person-empty { margin: 6px 0; font-size: 12px; color: var(--muted); }
+#plan-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.side #map { max-height: 150px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; min-height: 0; display: flex; flex-direction: column; }
+h2 { margin: 0 0 10px; font-size: 22px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+/* floor plan */
+#map { width: 100%; height: auto; display: block; }
+.wall { fill: none; stroke: var(--muted); stroke-width: 5; }
+.zone { fill: var(--muted); font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.link { stroke: var(--muted); stroke-width: 5; stroke-dasharray: 2 14; stroke-linecap: round; opacity: .6; }
+.node .dot { stroke: var(--panel); stroke-width: 5; transition: fill .4s; }
+.node.green .dot { fill: var(--ok); } .node.amber .dot { fill: var(--warn); } .node.grey .dot { fill: var(--off); }
+.node .id { font-size: 26px; font-weight: 800; fill: #0b0d10; text-anchor: middle; dominant-baseline: central; }
+.node .id.long { font-size: 20px; }
+.node.grey .id { fill: #ffffff; }
+.node .label { font-size: 28px; font-weight: 700; fill: var(--fg); text-anchor: middle; }
+.node .age { font-size: 22px; fill: var(--muted); text-anchor: middle; }
+.node .ring { fill: none; stroke: var(--fg); stroke-width: 6; opacity: 0; transform-box: fill-box; transform-origin: center; }
+.node.hl .ring { animation: ring 1s ease-out infinite; }
+@keyframes ring { from { opacity: .9; transform: scale(1); } to { opacity: 0; transform: scale(1.7); } }
+.arc { fill: none; stroke-width: 7; stroke-linecap: round; stroke-dasharray: 18 12; animation: flow .6s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -30; } }
+.legend { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 8px; font-size: 18px; color: var(--muted); }
+.legend i { display: inline-block; width: 16px; height: 16px; border-radius: 50%; margin-right: 6px; vertical-align: -2px; }
+#others, #stats { margin-top: 10px; font-size: 18px; color: var(--muted); }
+
+/* alert feed */
+#feed { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+#empty { color: var(--muted); padding: 24px 4px; }
+.card { --c: var(--other); --cbg: var(--other-bg); border-left: 12px solid var(--c); background: var(--cbg); border-radius: 10px; padding: 12px 16px; }
+.sos { --c: var(--sos); --cbg: var(--sos-bg); }
+.person { --c: var(--person); --cbg: var(--person-bg); }
+.phone { --c: var(--phone); --cbg: var(--phone-bg); }
+.heat { --c: var(--heat); --cbg: var(--heat-bg); }
+.hazard { --c: var(--hazard); --cbg: var(--hazard-bg); }
+.card .top { display: flex; align-items: center; gap: 12px; }
+.badge { background: var(--c); color: var(--badge-fg); font-weight: 800; font-size: 18px; letter-spacing: .05em; padding: 2px 10px; border-radius: 6px; }
+.card .zone-t { font-weight: 700; }
+.card .time { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 700; }
+.card .main { font-size: 28px; font-weight: 750; margin: 6px 0 2px; overflow-wrap: anywhere; }
+.card.sos .main { font-size: 38px; }
+.card .details { font-size: 21px; }
+.card .yes { color: var(--ok); font-weight: 800; }
+.card .no { color: var(--warn); font-weight: 800; }
+.card .meta { display: flex; align-items: center; gap: 12px; margin-top: 8px; color: var(--muted); font-size: 18px; }
+.card .route { font-family: ui-monospace, Menlo, Consolas, monospace; flex: 1; }
+.card.handled { opacity: .45; filter: grayscale(1); }
+.card.acked { opacity: .8; filter: none; }
+.card.person.down { --c: var(--sos); }
+.card .bad-t { color: var(--sos); font-weight: 800; }
+.card .near { color: var(--sos); font-weight: 800; animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+.card .reps { font-weight: 700; }
+.card .acked-t { color: var(--ok); font-weight: 800; }
+button.reply { border-color: var(--ok); color: var(--ok); }
+button.reply:hover { background: var(--ok); color: var(--bg); }
+.card.fresh { animation: flash 1s ease-in-out 3; }
+@keyframes flash { 50% { box-shadow: 0 0 0 5px var(--c); } }
+
+
+/* spotter live view (bulk link through the relay mesh) */
+section.side { overflow-y: auto; }
+#remote { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+#remote figure { margin: 0; min-width: 0; }
+#remote img, #remote canvas { width: 100%; height: auto; display: block; background: #000; border-radius: 8px; aspect-ratio: 4 / 3; object-fit: contain; max-height: none; }
+#view3d { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; }
+#remote figcaption { height: 2.7em; overflow: hidden; font-size: 13px; line-height: 1.35; color: var(--muted); margin-top: 5px; overflow-wrap: anywhere; }
+#view3d button[aria-pressed="true"] { box-shadow: inset 0 0 0 1px #72c7ff; }
+#remote figcaption.stale { color: var(--warn); }
+h2.sub-h { margin-top: 18px; }
+h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 15px; }
+#rstats { font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 6px; }
+#rstats.stale { color: var(--warn); font-weight: 600; }
+
+@media (max-width: 1500px) {
+  header { gap: 9px; }
+  h1 { font-size: 20px; }
+  .count { font-size: 12px; padding: 4px 7px; }
+  header button, #link { font-size: 12px; }
+  #clock { font-size: 23px; }
+  section { padding: 12px 14px; }
+  h2 { font-size: 20px; }
+  #plan-body { grid-template-columns: minmax(0, 1fr) 160px; }
+  #plan-key .plan-hint { display: none; }
+}
+
+@media (max-width: 1000px) {
+  header { flex-wrap: wrap; }
+  h1 span { display: none; }
+  #counts { order: 1; flex: 1 0 100%; justify-content: space-between; }
+  main { grid-template-columns: 1fr; grid-template-rows: auto; }
+  section.plan, section.live, section.side { grid-column: 1; grid-row: auto; }
+  #planwrap { min-height: 60vh; }
+  #feed { overflow: visible; }
+  body { height: auto; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Rescue Net <span>· Command Post</span></h1>
+  <div id="counts" title="Unhandled alerts by type"></div>
+  <div class="spacer"></div>
+  <div id="link" class="bad">Connecting…</div>
+  <button id="sound" class="off" title="Browsers only allow sound after a click">Enable sound</button>
+  <button id="theme">Light</button>
+  <div id="clock">--:--:--</div>
+</header>
+<main>
+  <section class="plan">
+    <h2>Floor plan <small id="plan-t">waiting for LiDAR</small></h2>
+    <div id="plan-tools" aria-label="Floor plan controls">
+      <button id="plan-fit" class="active" title="Return to automatic map fitting">Fit</button>
+      <button id="plan-labels" class="active" aria-pressed="true" title="Show or hide small marker labels">Labels</button>
+      <button id="plan-raw" class="active" aria-pressed="true" title="Show the raw LiDAR scan and occupancy map">Raw scan</button>
+      <button id="plan-signal" class="active" aria-pressed="true" aria-controls="plan" title="Show measured Wi-Fi signal along the walked path">Signal</button>
+      <span>Mark relay:</span>
+      <button data-node="B2" title="Mark B2 at SP1's position">B2 here</button><button data-node="B1" title="Mark B1 at SP1's position">B1 here</button><button data-node="BASE" title="Mark BASE at SP1's position">BASE here</button>
+      <button id="plan-pause" aria-pressed="false" title="Pause mapping before setting the rig down on the floor; resume after picking it up at the same spot">Pause map</button>
+      <button id="plan-reset" title="Start a new map and clear relay positions">Reset map</button>
+    </div>
+    <div id="plan-key">
+      <span id="plan-signal-key" aria-label="Measured Wi-Fi signal legend">
+        <span id="plan-signal-caption">Wi-Fi · no samples</span>
+        <span><i style="background:var(--signal-good)"></i>Good ≥ −67</span>
+        <span><i style="background:var(--signal-fair)"></i>Fair −77 to &lt;−67</span>
+        <span><i style="background:var(--signal-poor)"></i>Poor &lt; −77 dBm</span>
+      </span>
+      <span class="plan-hint">Purple dashed circle = suggested relay spot · scroll to zoom · drag to pan</span>
+    </div>
+    <div id="plan-zone-key">Halo = phones heard by that relay (zone, not a position)<br>Red band = SOS phone distance from the relay, from its Wi-Fi signal (rough)</div>
+    <div id="plan-body">
+      <div id="planwrap"><canvas id="plan" aria-label="Floor plan; scroll to zoom, drag empty space to pan or a relay to move it"></canvas></div>
+      <aside id="plan-people" aria-label="People on the floor plan">
+        <h3>People <span id="plan-person-count"></span></h3>
+        <div id="plan-person-list"></div>
+        <p id="plan-person-empty">No sightings</p>
+      </aside>
+    </div>
+  </section>
+  <section class="live">
+    <div id="remote">
+      <figure><img id="rcam" alt="SP1 camera"><figcaption id="rcam-t">Camera: waiting for the first frame</figcaption></figure>
+      <figure><img id="rthermal" alt="SP1 thermal camera"><figcaption id="rthermal-t">Thermal: waiting</figcaption></figure>
+      <figure id="fig3d"><div id="view3d" hidden></div><canvas id="rlidar" width="400" height="300"></canvas><figcaption id="rlidar-t">LiDAR: waiting</figcaption></figure>
+    </div>
+    <div id="rstats"></div>
+  </section>
+  <section class="side">
+    <h2>Relay chain</h2>
+    <svg id="map" viewBox="0 0 1000 180" role="img" aria-label="Relay chain with radio node ids and last heard status"></svg>
+    <div class="legend">
+      <span><i style="background:var(--ok)"></i>heard &lt; 30 s ago</span>
+      <span><i style="background:var(--warn)"></i>&lt; 60 s</span>
+      <span><i style="background:var(--off)"></i>silent</span>
+    </div>
+    <div id="others"></div>
+    <div id="stats"></div>
+    <h2 class="sub-h">Alerts</h2>
+    <div id="feed"><div id="empty">No alerts yet. Heartbeats keep the relay chain up to date.</div></div>
+  </section>
+</main>
+<script>
+"use strict";
+
+const NODES = [{ id: "SP1" }, { id: "B2" }, { id: "B1" }, { id: "BASE" }];
+const TYPE_ORDER = ["SOS", "PERSON", "PHONE", "HEAT", "HAZARD"];
+const TYPE_CLASS = { SOS: "sos", PERSON: "person", PHONE: "phone", HEAT: "heat", HAZARD: "hazard" };
+const VIEW = { L: "left of view", C: "centre of view", R: "right of view" };
+const SHOWN_KEYS = new Set(["id", "src", "ttl", "rt", "t", "z", "key", "rx", "handled", "msg", "_rssi",
+                            "q", "p", "inj", "nr", "ps", "reps", "first", "acked", "ack_msg", "sr"]);
+// SOS range from one relay: the phone's RSSI at that relay's access point (sr, dBm).
+// d = 10^((-40 - sr) / 25) m, clamped to 0.5..30 m; the band d/1.74..d*1.74 is about +-6 dB.
+// A distance from one relay, not a position.
+function sosRange(sr) {
+  if (typeof sr !== "number" || !Number.isFinite(sr) || sr >= 0 || sr < -150) return null;
+  const d = Math.min(30, Math.max(0.5, 10 ** ((-40 - sr) / 25)));
+  return { d, inner: d / 1.74, outer: d * 1.74, sr: Math.round(sr) };
+}
+const sosMetres = (d) => d < 2.95 ? d.toFixed(1) : String(Math.round(d));
+const sosRangeText = (node, range) => `about ${sosMetres(range.d)} m from ${node} (Wi-Fi signal ${range.sr} dBm)`;
+const INJURY = { 0: "no one hurt", 1: "hurt, can move", 2: "TRAPPED / can't move" };
+const HIGHLIGHT_MS = 3000;
+const SVGNS = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;          // always textContent: SOS text comes from strangers
+  return e;
+}
+function svg(tag, attrs, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  return e;
+}
+const fmtTime = (epoch) => new Date(epoch * 1000).toLocaleTimeString([], { hour12: false });
+function ago(s) {
+  s = Math.max(0, Math.round(s));
+  return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`;
+}
+
+// ---------- floor plan ----------
+const NX = (i) => 100 + i * (800 / (NODES.length - 1)), NY = 65;
+const nodeEls = {};
+
+function buildMap() {
+  const map = $("map");
+  for (let i = 0; i < NODES.length - 1; i++) {
+    map.appendChild(svg("line", { class: "link", x1: NX(i), y1: NY, x2: NX(i + 1), y2: NY }));
+  }
+  map.appendChild(svg("g", { id: "arcs" }));
+  NODES.forEach((n, i) => {
+    const g = svg("g", { class: "node grey" });
+    g.appendChild(svg("circle", { class: "ring", cx: NX(i), cy: NY, r: 40 }));
+    g.appendChild(svg("circle", { class: "dot", cx: NX(i), cy: NY, r: 40 }));
+    g.appendChild(svg("text", { class: n.id.length > 3 ? "id long" : "id", x: NX(i), y: NY }, n.id));
+    const age = svg("text", { class: "age", x: NX(i), y: NY + 76 }, "never heard");
+    g.appendChild(age);
+    map.appendChild(g);
+    nodeEls[n.id] = { g, age, i, until: 0 };
+  });
+}
+
+function renderNodes(nodes) {
+  const now = Date.now();
+  for (const n of NODES) {
+    const info = nodes[n.id] || {}, e = nodeEls[n.id];
+    e.g.setAttribute("class", `node ${info.health || "grey"}${e.until > now ? " hl" : ""}`);
+    e.age.textContent = info.age == null ? "never heard" : `heard ${ago(info.age)}`;
+  }
+  const others = Object.keys(nodes).filter((id) => !nodeEls[id]);
+  $("others").textContent = others.length
+    ? "Other nodes: " + others.map((id) => `${id} (${nodes[id].health})`).join(", ") : "";
+}
+
+// Pulse the nodes on the alert's path and draw arcs hop by hop (a skipped node shows as a bigger jump).
+function highlightRoute(a) {
+  const path = [a.src, ...(Array.isArray(a.rt) ? a.rt : [])];
+  if (path[path.length - 1] !== "BASE") path.push("BASE");
+  const hops = path.filter((id) => nodeEls[id]);
+  const until = Date.now() + HIGHLIGHT_MS;
+  for (const id of hops) { nodeEls[id].until = until; nodeEls[id].g.classList.add("hl"); }
+  setTimeout(() => {
+    for (const id of hops) if (nodeEls[id].until <= Date.now()) nodeEls[id].g.classList.remove("hl");
+  }, HIGHLIGHT_MS + 50);
+  for (let k = 0; k < hops.length - 1; k++) {
+    const i1 = nodeEls[hops[k]].i, i2 = nodeEls[hops[k + 1]].i;
+    if (i1 === i2) continue;
+    const x1 = NX(i1), x2 = NX(i2), y = NY - 44, lift = Math.min(16, 8 + 3 * (Math.abs(i2 - i1) - 1));
+    const p = svg("path", { class: "arc", d: `M${x1} ${y} Q${(x1 + x2) / 2} ${y - 2 * lift} ${x2} ${y}` });
+    p.style.stroke = `var(--${TYPE_CLASS[a.t] || "other"})`;
+    $("arcs").appendChild(p);
+    setTimeout(() => p.remove(), HIGHLIGHT_MS);
+  }
+}
+
+// ---------- alert cards ----------
+const deg = (dt) => (dt == null ? null : `${dt >= 0 ? "+" : ""}${dt} °C`);
+const zone = (a) => (a.z ? `zone ${a.z}` : null);
+function extras(a) {
+  return Object.entries(a).filter(([k]) => !SHOWN_KEYS.has(k))
+    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`);
+}
+
+function describe(a) {
+  switch (a.t) {
+    case "SOS":
+      return {
+        main: a.msg ? `“${a.msg}”` : "SOS (no message)",
+        details: [a.p != null ? (a.p >= 4 ? "4 or more people" : `${a.p} ${a.p === 1 ? "person" : "people"}`) : null,
+                  a.inj != null ? el("span", a.inj > 0 ? "bad-t" : null, INJURY[a.inj] || `injury ${a.inj}`) : null,
+                  a.src === "B1" ? "sent from the rescue Wi-Fi at B1" : null,
+                  typeof a.src === "string" && sosRange(a.sr)
+                    ? sosRangeText(a.src.length > 24 ? a.src.slice(0, 24) + "…" : a.src, sosRange(a.sr)) : null],
+      };
+    case "PERSON":
+      return {
+        main: `${a.ps === "D" ? "Person on the ground" : "Person detected"}${a.c != null ? ` · ${a.c}%` : ""}`,
+        details: [a.ps === "D" ? el("span", "bad-t", "lying down, possible casualty") : a.ps === "U" ? "upright" : null,
+                  a.th === 1 ? el("span", "yes", "thermal confirmed") : a.th === 0 ? el("span", "no", "thermal not confirmed") : null,
+                  a.th != null ? deg(a.dt) : null, VIEW[a.v]],
+      };
+    case "PHONE": {
+      const where = a.z || a.src;
+      return {
+        main: a.n != null ? `${a.n} device${a.n === 1 ? "" : "s"} near ${where}` : `Phones heard near ${where}`,
+        details: [a.nr > 0 ? el("span", "near", `${a.nr === 1 ? "A phone is" : `${a.nr} phones are`} right next to ${where}`) : null,
+                  a.rssi != null ? `strongest ${a.rssi} dBm` : null, a.ap != null ? `${a.ap} Apple` : null],
+      };
+    }
+    case "HEAT":
+      return {
+        main: "Warm spot, no person seen",
+        details: [deg(a.dt), VIEW[a.v], a.c != null ? `${a.c}% confidence` : null],
+      };
+    case "HAZARD":
+      return { main: a.msg || "Hazard reported", details: extras(a) };
+    case "MARK":
+      return {
+        main: `${a.z || a.src} position marked`,
+        details: [a.slam ? `x ${a.mx} m, y ${a.my} m on the floor plan` : "no SLAM map yet: placed at the start point",
+                  "button on the node, SP1 held next to it"],
+      };
+    default:
+      return { main: `${a.t || "Unknown"} message${a.msg ? `: ${a.msg}` : ""}`, details: extras(a) };
+  }
+}
+
+function buildCard(a, fresh) {
+  const card = el("article", `card ${TYPE_CLASS[a.t] || "other"}${a.ps === "D" ? " down" : ""}${a.handled ? " handled" : ""}${a.acked ? " acked" : ""}${fresh ? " fresh" : ""}`);
+  const top = el("div", "top");
+  top.appendChild(el("span", "badge", a.t || "?"));
+  if (zone(a)) top.appendChild(el("span", "zone-t", `Zone ${a.z}`));
+  top.appendChild(el("span", "time", fmtTime(a.rx)));
+  card.appendChild(top);
+
+  const d = describe(a);
+  card.appendChild(el("div", "main", d.main));
+  const parts = d.details.filter(Boolean);
+  if (parts.length) {
+    const row = el("div", "details");
+    parts.forEach((x, i) => {
+      if (i) row.appendChild(document.createTextNode(" · "));
+      row.appendChild(typeof x === "string" ? el("span", null, x) : x);
+    });
+    card.appendChild(row);
+  }
+
+  const meta = el("div", "meta");
+  const route = [a.src, ...(Array.isArray(a.rt) ? a.rt : [])].filter(Boolean).join(" → ");
+  const rssi = typeof a._rssi === "number" ? `  ·  ${a._rssi} dBm at base` : "";
+  meta.appendChild(el("span", "route", `${route}${a.id ? `  ·  #${a.id}` : ""}${rssi}`));
+  if (a.reps > 1) meta.appendChild(el("span", "reps", `×${a.reps} since ${fmtTime(a.first)}`));
+  if (a.acked) {
+    meta.appendChild(el("span", "acked-t", `Reply sent to survivor ${fmtTime(a.acked)}`));
+  } else if (a.t === "SOS" && a.id && canSend) {
+    const r = el("button", "reply", "Reply: help is on the way");
+    r.onclick = () => sendAck(a.key, r);
+    meta.appendChild(r);
+  }
+  if (a.acked) {
+    /* reply sent = handled */
+  } else if (a.handled) {
+    meta.appendChild(el("span", null, "Handled"));
+  } else {
+    const b = el("button", null, "Mark handled");
+    b.onclick = () => markHandled(a.key, b);
+    meta.appendChild(b);
+  }
+  card.appendChild(meta);
+  return card;
+}
+
+const cards = new Map();          // alert key -> { el, handled }
+let knownKeys = null, lastOrder = "";
+
+function renderFeed(alerts) {
+  const fresh = [];
+  if (knownKeys === null) {
+    knownKeys = new Set(alerts.map((a) => a.key));       // first load: no beeps for old alerts
+  } else {
+    for (const a of alerts) if (!knownKeys.has(a.key)) { knownKeys.add(a.key); fresh.push(a); }
+  }
+  const live = new Set();
+  for (const a of alerts) {
+    live.add(a.key);
+    const c = cards.get(a.key);
+    const sig = `${a.handled}|${a.rx}|${a.acked || ""}|${canSend}`;
+    if (!c || c.sig !== sig) {
+      const node = buildCard(a, fresh.includes(a));
+      if (c) c.el.replaceWith(node);
+      if (c && c.rx !== a.rx) highlightRoute(a);          // a repeat folded into this card
+      cards.set(a.key, { el: node, sig, rx: a.rx });
+    }
+  }
+  for (const [k, c] of cards) if (!live.has(k)) { c.el.remove(); cards.delete(k); }
+  const order = alerts.map((a) => a.key).join(",");
+  if (order !== lastOrder) {
+    lastOrder = order;
+    const feed = $("feed");
+    for (const a of alerts) feed.appendChild(cards.get(a.key).el);
+  }
+  $("empty").hidden = alerts.length > 0;
+
+  for (const a of fresh) highlightRoute(a);
+  if (fresh.some((a) => a.t === "SOS")) beep();
+}
+
+let canSend = false;
+async function sendAck(key, btn) {
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    const r = await fetch(`/api/ack/${encodeURIComponent(key)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ msg: "Help is on the way" }),
+    });
+    if (!r.ok) { btn.disabled = false; btn.textContent = "Send failed, retry"; return; }
+  } catch (e) { btn.disabled = false; btn.textContent = "Send failed, retry"; return; }
+  refresh();
+}
+
+async function markHandled(key, btn) {
+  btn.disabled = true;
+  try { await fetch(`/api/handle/${encodeURIComponent(key)}`, { method: "POST" }); } catch (e) { /* next poll retries the view */ }
+  refresh();
+}
+
+// ---------- top bar ----------
+function renderCounts(alerts) {
+  const counts = {};
+  for (const a of alerts) if (!a.handled) counts[a.t] = (counts[a.t] || 0) + 1;
+  const box = $("counts");
+  box.textContent = "";
+  for (const t of TYPE_ORDER) {
+    const n = counts[t] || 0;
+    const pill = el("span", `count ${TYPE_CLASS[t]}${n ? "" : " zero"}`, `${n} ${t}`);
+    pill.style.setProperty("--c", `var(--${TYPE_CLASS[t]})`);
+    box.appendChild(pill);
+  }
+}
+
+function renderLink(s) {
+  const p = $("link");
+  if (s === null) { p.className = "bad"; p.textContent = "Dashboard server offline"; p.title = p.textContent; return; }
+  const src = s.source || "";
+  if (s.serial_connected) {
+    if (src.startsWith("mock") || src.startsWith("replay")) { p.className = "info"; p.textContent = src.replace(/^./, (c) => c.toUpperCase()); }
+    else if (src === "stdin") { p.className = "good"; p.textContent = "● Reading stdin"; }
+    else if (src.startsWith("hub")) { p.className = "good"; p.textContent = `● Live · ${src.replace(/^hub /, "")} via board hub`; }
+    else { p.className = "good"; p.textContent = `● Serial connected · ${src}`; }
+  } else {
+    p.className = "bad";
+    p.textContent = `● Serial disconnected${src ? ` · ${src}` : ""}`;
+  }
+  p.title = p.textContent;
+}
+
+// ---------- sound (Web Audio, no files; browsers need one click first) ----------
+let audioCtx = null;
+const soundOn = () => !!audioCtx && audioCtx.state === "running";
+function updateSoundBtn() {
+  const b = $("sound");
+  b.textContent = soundOn() ? "Sound on" : "Enable sound";
+  b.classList.toggle("off", !soundOn());
+}
+function enableSound(test) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume().then(() => { updateSoundBtn(); if (test) beep(); });
+  } catch (e) { /* no audio available */ }
+}
+function beep() {
+  if (!soundOn()) return;
+  const t0 = audioCtx.currentTime;
+  [[880, 0], [660, 0.22], [880, 0.44], [660, 0.66]].forEach(([freq, dt]) => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "square";
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0 + dt);
+    g.gain.exponentialRampToValueAtTime(0.25, t0 + dt + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.2);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t0 + dt);
+    o.stop(t0 + dt + 0.21);
+  });
+}
+$("sound").onclick = () => enableSound(true);
+document.addEventListener("pointerdown", () => enableSound(false));
+
+// ---------- theme ----------
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $("theme").textContent = t === "light" ? "Dark" : "Light";
+  try { localStorage.setItem("rn-theme", t); } catch (e) { /* storage blocked */ }
+}
+$("theme").onclick = () => setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+try { setTheme(localStorage.getItem("rn-theme") || "dark"); } catch (e) { setTheme("dark"); }
+
+// ---------- polling ----------
+let lastOk = 0, busy = false, planReady = false;
+function render(s) {
+  canSend = !!s.can_send;
+  renderLink(s);
+  renderNodes(s.nodes);
+  renderCounts(s.alerts);
+  renderFeed(s.alerts);
+  updatePlanAlerts(s);
+  const st = s.stats || {};
+  $("stats").textContent = `Messages ${st.received ?? 0} · duplicates dropped ${st.duplicates ?? 0} · non-JSON lines ignored ${st.ignored ?? 0}`;
+}
+async function refresh() {
+  if (busy) return;
+  busy = true;
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const s = await r.json();
+    lastOk = Date.now();
+    render(s);
+  } catch (e) {
+    if (Date.now() - lastOk > 3000) renderLink(null);
+  } finally {
+    busy = false;
+  }
+}
+function tick() {
+  $("clock").textContent = new Date().toLocaleTimeString([], { hour12: false });
+  // The first tick precedes PLAN initialization. Later ticks also expire phone
+  // zones when either existing poll is stalled or offline; no extra timer.
+  if (planReady && PLAN.alerts.length) drawPlan();
+}
+
+buildMap();
+tick();
+setInterval(tick, 1000);
+refresh();
+setInterval(refresh, 1000);
+
+// ---- spotter live view: camera / thermal JPEGs and LiDAR outline sent over the bulk link ----
+const remoteSeq = {};
+function ageText(a) { return a == null ? "" : a < 1.5 ? "just now" : `${Math.round(a)} s ago`; }
+function drawLidar(mm) {
+  const c = $("rlidar"), g = c.getContext("2d"), W = c.width, H = c.height, C = H / 2, CX = W / 2;
+  const css = getComputedStyle(document.documentElement);
+  const pts = mm.map((d, i) => [i, d]).filter(([, d]) => d > 0);
+  const far = pts.length ? Math.max(...pts.map(([, d]) => d)) : 6000;
+  const maxM = Math.min(12, Math.max(3, Math.ceil(far / 1000)));
+  const k = (C - 10) / (maxM * 1000);
+  g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+  g.save(); g.translate(CX - C, 0);
+  g.strokeStyle = "#333"; g.fillStyle = "#777"; g.font = "13px sans-serif"; g.lineWidth = 1;
+  for (let r = 1; r <= maxM; r++) {
+    g.beginPath(); g.arc(C, C, r * 1000 * k, 0, 2 * Math.PI); g.stroke();
+    g.fillText(`${r} m`, C + 3, C - r * 1000 * k + 13);
+  }
+  g.fillStyle = css.getPropertyValue("--ok") || "#22c55e";
+  for (const [deg, d] of pts) {
+    const t = deg * Math.PI / 180;
+    g.fillRect(C + Math.sin(t) * d * k - 2, C - Math.cos(t) * d * k - 2, 4, 4);
+  }
+  g.fillStyle = css.getPropertyValue("--warn") || "#f5a524";
+  g.beginPath(); g.arc(C, C, 6, 0, 2 * Math.PI); g.fill();
+  g.strokeStyle = g.fillStyle; g.lineWidth = 3; g.beginPath(); g.moveTo(C, C); g.lineTo(C, C - 22); g.stroke();
+  g.restore();
+}
+async function refreshRemote() {
+  let r;
+  try { r = await (await fetch("/api/remote", { cache: "no-store" })).json(); } catch (e) { return; }
+  for (const name of ["camera", "thermal"]) {
+    const it = r[name], id = name === "camera" ? "rcam" : "rthermal";
+    const label = name === "camera" ? "Camera" : "Thermal (bright = warm)";
+    if (it.seq != null && it.seq !== remoteSeq[name]) { remoteSeq[name] = it.seq; $(id).src = `/api/remote/${name}.jpg?s=${it.seq}`; }
+    const t = $(id + "-t");
+    t.textContent = it.seq == null ? `${label}: waiting${it.partial ? ` (${it.partial} chunks)` : ""}`
+      : `${label} · ${ageText(it.age)} · ${(it.bytes / 1024).toFixed(1)} KB`;
+    t.classList.toggle("stale", it.age != null && it.age > 10);
+  }
+  const li = r.lidar, lt = $("rlidar-t");
+  if ($("view3d").hidden) {            // the 3D view (view3d.js) owns this pane and its caption once it is shown
+    if (li.mm && li.seq !== remoteSeq.lidar) { remoteSeq.lidar = li.seq; drawLidar(li.mm); }
+    lt.textContent = li.seq == null ? "LiDAR: waiting" : `LiDAR around SP1 (1 m rings) · ${ageText(li.age)}`;
+    lt.classList.toggle("stale", li.age != null && li.age > 10);
+  }
+  const lost = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].lost, 0);
+  const ok = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].ok, 0);
+  const m = r.meta || {}, LV = ["good", "fair", "poor"];
+  const down = m.age != null && m.age > 5;   // no spotter meta for 5 s: the last level/rssi is stale, not "good"
+  const lvl = m.lvl == null ? "" : down ? ` · LINK DOWN, nothing from the spotter for ${Math.round(m.age)} s`
+    : ` · link ${LV[m.lvl] || m.lvl}${m.rssi != null ? ` (${Math.round(m.rssi)} dBm)` : ""}${m.lvl > 0 ? ", pictures reduced to keep the map and people flowing" : ""}`;
+  $("rstats").textContent = `Bulk link ${r.kbps} kbps · ${ok} objects received, ${lost} incomplete${lvl}`;
+  $("rstats").classList.toggle("stale", down);
+}
+refreshRemote();
+setInterval(refreshRemote, 300);
+
+// ---- floor plan: SLAM map, spotter path, relays, people (all in metres, map frame from the dashboard) ----
+const PLAN = { data: null, img: null, imgV: -1, view: null, manualView: null,
+               drag: null, dragPos: null, pan: null, labels: true, rawScan: null, signal: true, highlight: null, rows: new Map(),
+               alerts: [], alertClock: null };
+planReady = true;
+function updatePlanAlerts(state, monotonicNow = performance.now()) {
+  PLAN.alerts = Array.isArray(state.alerts) ? state.alerts : [];
+  PLAN.alertClock = Number.isFinite(state.now) && Number.isFinite(monotonicNow)
+    ? { serverNow: state.now, receivedAt: monotonicNow } : null;
+  drawPlan();
+}
+function planZoneNow(monotonicNow = performance.now()) {
+  const clock = PLAN.alertClock;
+  return clock && Number.isFinite(monotonicNow)
+    ? clock.serverNow + Math.max(0, monotonicNow - clock.receivedAt) / 1000 : NaN;
+}
+function planRelayZones(alerts, nodes, nowSeconds) {
+  const phones = new Map(), sos = new Map();
+  for (const a of Array.isArray(alerts) ? alerts : []) {
+    if (!a || typeof a !== "object" || (a.t !== "PHONE" && a.t !== "SOS")) continue;
+    const node = a.z || a.src;
+    if (typeof node !== "string" || !nodes || !Object.prototype.hasOwnProperty.call(nodes, node)) continue;
+    const p = nodes[node];
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+    if (a.t === "PHONE") {
+      if (!Number.isFinite(a.rx) || !Number.isFinite(nowSeconds) || nowSeconds - a.rx < 0 || nowSeconds - a.rx > 60) continue;
+      if (!phones.has(node) || phones.get(node).rx < a.rx) phones.set(node, a);
+    } else if (!Number.isFinite(a.acked)) {
+      // handled alone does not acknowledge an SOS.
+      if (!sos.has(node)) sos.set(node, { count: 0, ranged: [] });
+      const entry = sos.get(node), range = sosRange(a.sr);
+      entry.count++;
+      if (range) entry.ranged.push({ ...range, rx: Number.isFinite(a.rx) ? a.rx : -Infinity });
+    }
+  }
+  const name = (node) => node.length > 24 ? node.slice(0, 24) + "…" : node;
+  return {
+    phones: [...phones].flatMap(([node, a]) => {
+      if (!Number.isSafeInteger(a.n) || a.n < 0 || !Number.isFinite(a.rssi) || a.rssi < -150 || a.rssi > 0) return [];
+      const nr = Number.isSafeInteger(a.nr) && a.nr >= 0 && a.nr <= a.n ? a.nr : 0;
+      return [{ node, x: nodes[node].x, y: nodes[node].y, radius_m: 3, n: a.n, rssi: a.rssi, nr,
+        label: `${name(node)} hears ${a.n} ${a.n === 1 ? "phone" : "phones"}${a.n > 0 ? ` · closest ${a.rssi} dBm` : ""}${nr > 0 ? ` · ${nr} within ~0.5 m` : ""}` }];
+    }),
+    sos: [...sos].map(([node, { count, ranged }]) => {
+      // One band per SOS with a signal, newest three.
+      const bands = ranged.sort((p, q) => q.rx - p.rx).slice(0, 3);
+      const lines = bands.map((range) => sosRangeText(name(node), range));
+      if (bands.length < count) lines.push(bands.length ? "(other phones within its Wi-Fi range)" : "(phone within its Wi-Fi range)");
+      return { node, x: nodes[node].x, y: nodes[node].y, count, bands,
+        label: `SOS via ${name(node)}${count > 1 ? ` · ${count} reports` : ""}`, lines };
+    }),
+  };
+}
+try { PLAN.signal = localStorage.getItem("rn-plan-signal") !== "off"; } catch (e) { /* storage blocked: default on */ }
+function signalControl() {
+  $("plan-signal").setAttribute("aria-pressed", String(PLAN.signal));
+  $("plan-signal").classList.toggle("active", PLAN.signal);
+}
+signalControl();
+const CHAIN = ["B2", "B1", "BASE"];
+const freshPerson = (person) => Number.isFinite(person.age) && person.age >= 0 && person.age < 15;
+const planWalls = (data) => (Array.isArray(data.walls) ? data.walls : [])
+  .filter((wall) => Array.isArray(wall) && wall.length === 4 && wall.every(Number.isFinite));
+const showRawPlan = (data) => PLAN.rawScan ?? (planWalls(data).length === 0);
+const planSignal = (data) => (Array.isArray(data.rssi) ? data.rssi.slice(-800) : [])
+  .filter((p) => Array.isArray(p) && p.length >= 3 && p.slice(0, 3).every(Number.isFinite) && p[2] >= -150 && p[2] <= 0);
+const signalLevel = (rssi) => rssi >= -67 ? "good" : rssi >= -77 ? "fair" : "poor";
+function planColors() {
+  const css = getComputedStyle(document.documentElement), v = (n) => css.getPropertyValue(n).trim();
+  return { ok: v("--ok"), warn: v("--warn"), off: v("--off"), bad: v("--sos"), info: v("--info"), hazard: v("--hazard"), person: v("--person"),
+           signal: { good: v("--signal-good"), fair: v("--signal-fair"), poor: v("--signal-poor") } };
+}
+function planBounds(d) {
+  if (PLAN.manualView) return PLAN.manualView;
+  if (PLAN.drag && PLAN.view) return PLAN.view;
+  const xs = [], ys = [];
+  const add = (x, y) => { if (Number.isFinite(x) && Number.isFinite(y)) { xs.push(x); ys.push(y); } };
+  if (d.png) { add(d.png.x0, d.png.y0); add(d.png.x0 + d.png.w * d.png.res, d.png.y0 + d.png.h * d.png.res); }
+  for (const wall of planWalls(d)) { add(wall[0], wall[1]); add(wall[2], wall[3]); }
+  add(d.pose[0], d.pose[1]);
+  for (const p of d.path) add(p[0], p[1]);
+  for (const n of Object.values(d.nodes)) if (n) add(n.x, n.y);
+  for (const p of d.persons) if (freshPerson(p)) add(p.x, p.y);
+  if (!xs.length) add(0, 0);
+  let x0 = Math.min(...xs) - 0.3, x1 = Math.max(...xs) + 0.3, y0 = Math.min(...ys) - 0.3, y1 = Math.max(...ys) + 0.3;
+  const minSpan = 6;
+  if (x1 - x0 < minSpan) { const c = (x0 + x1) / 2; x0 = c - minSpan / 2; x1 = c + minSpan / 2; }
+  if (y1 - y0 < minSpan) { const c = (y0 + y1) / 2; y0 = c - minSpan / 2; y1 = c + minSpan / 2; }
+  // Refit current map evidence. Raw rays, old people and a previous outlier
+  // must not leave the map permanently zoomed out.
+  return { x0, x1, y0, y1 };
+}
+function drawPlan() {
+  const d = PLAN.data, c = $("plan");
+  if (!d) return;
+  const W = c.clientWidth, H = c.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = "#0d1014"; g.fillRect(0, 0, W, H);
+  const b = PLAN.view = planBounds(d);
+  const k = Math.min(Math.max(1, W - 24) / (b.x1 - b.x0), Math.max(1, H - 24) / (b.y1 - b.y0));
+  const ox = W / 2 - k * (b.x0 + b.x1) / 2, oy = H / 2 + k * (b.y0 + b.y1) / 2;
+  const sx = (x) => ox + k * x, sy = (y) => oy - k * y;
+  PLAN.toMap = (px, py) => [(px - ox) / k, (oy - py) / k];
+  PLAN.toScreen = (x, y) => [sx(x), sy(y)];
+  PLAN.scale = k;
+  c.dataset.view = PLAN.manualView ? "manual" : "auto";
+  $("plan-fit").classList.toggle("active", !PLAN.manualView);
+  const C = planColors();
+  const walls = planWalls(d), raw = showRawPlan(d);
+  $("plan-raw").setAttribute("aria-pressed", String(raw));
+  $("plan-raw").classList.toggle("active", raw);
+  const occupied = [{ x: 8, y: H - 40, w: 140, h: 32 }];
+  // 1 m grid
+  g.strokeStyle = "#1a2027"; g.lineWidth = 1;
+  for (let x = Math.ceil(b.x0); x <= b.x1; x++) { g.beginPath(); g.moveTo(sx(x), 0); g.lineTo(sx(x), H); g.stroke(); }
+  for (let y = Math.ceil(b.y0); y <= b.y1; y++) { g.beginPath(); g.moveTo(0, sy(y)); g.lineTo(W, sy(y)); g.stroke(); }
+  // SLAM occupancy map
+  if (raw && d.png && PLAN.img && PLAN.img.complete && PLAN.img.naturalWidth) {
+    g.imageSmoothingEnabled = false;
+    g.globalAlpha = 0.95;
+    g.drawImage(PLAN.img, sx(d.png.x0), sy(d.png.y0 + d.png.h * d.png.res), d.png.w * d.png.res * k, d.png.h * d.png.res * k);
+    g.globalAlpha = 1;
+  }
+  // live scan (grey when SLAM rejected it: tilted or poor match, not part of the map)
+  g.fillStyle = d.scan_ok === false ? "#6b7280" : C.ok;
+  if (raw) for (const p of d.scan) g.fillRect(sx(p[0]) - 1.5, sy(p[1]) - 1.5, 3, 3);
+  // Vector walls remain crisp above either raw layer.
+  if (walls.length) {
+    g.strokeStyle = "#d7e1ec"; g.lineWidth = 3; g.lineCap = "round"; g.beginPath();
+    for (const [x1, y1, x2, y2] of walls) { g.moveTo(sx(x1), sy(y1)); g.lineTo(sx(x2), sy(y2)); }
+    g.stroke(); g.lineCap = "butt";
+  }
+  // walked path
+  if (d.path.length > 1) {
+    g.strokeStyle = C.info; g.lineWidth = 2; g.globalAlpha = 0.8; g.beginPath();
+    d.path.forEach((p, i) => (i ? g.lineTo(sx(p[0]), sy(p[1])) : g.moveTo(sx(p[0]), sy(p[1]))));
+    g.stroke(); g.globalAlpha = 1;
+  }
+  // Measured samples only: do not interpolate a signal level through unsampled
+  // stretches. Draw before relay suggestions, people and labels.
+  const samples = planSignal(d), node = typeof d.rssi_node === "string" ? d.rssi_node.trim().slice(0, 16) : "";
+  $("plan-signal-caption").textContent = `Wi-Fi${node ? ` to ${node}` : ""}${!PLAN.signal ? " · hidden" : !samples.length ? " · no samples" : ""}`;
+  $("plan-signal-key").title = `${samples.length} measured Wi-Fi samples${node ? ` to ${node}` : ""}. Good ≥ −67 dBm; fair ≥ −77 and < −67 dBm; poor < −77 dBm. No signal is inferred between samples.`;
+  if (PLAN.signal) for (const [x, y, rssi] of samples) {
+    const X = sx(x), Y = sy(y);
+    if (X < -3 || X > W + 3 || Y < -3 || Y > H + 3) continue;
+    g.fillStyle = C.signal[signalLevel(rssi)]; g.strokeStyle = "#0d1014"; g.lineWidth = 1;
+    g.beginPath(); g.arc(X, Y, 3, 0, 2 * Math.PI); g.fill(); g.stroke();
+  }
+  // relay chain links: spotter -> B2 -> B1 -> BASE (where positions are known)
+  const pos = (id) => {
+    if (PLAN.drag === id && PLAN.dragPos) return PLAN.dragPos;
+    const n = d.nodes[id]; return n && Number.isFinite(n.x) && Number.isFinite(n.y) ? [n.x, n.y] : null;
+  };
+  // Radio zones are attached to marked relays, never to inferred phone fixes.
+  // Reserve primary glyphs before placing their lower-priority zone text.
+  const zones = planRelayZones(PLAN.alerts, d.nodes, planZoneNow());
+  const zoneOccupied = occupied.slice();
+  const reserve = (x, y) => {
+    if (Number.isFinite(x) && Number.isFinite(y)) zoneOccupied.push({ x: sx(x) - 28, y: sy(y) - 24, w: 56, h: 48 });
+  };
+  for (const id of Object.keys(d.nodes)) { const p = pos(id); if (p) reserve(p[0], p[1]); }
+  for (const relay of d.relays || []) if (relay) reserve(relay.x, relay.y);
+  for (const p of d.persons) reserve(p.x, p.y);
+  reserve(d.pose[0], d.pose[1]);
+  g.save();
+  const phoneLabels = [], sosLabels = [];
+  for (const zone of zones.phones) {
+    const p = pos(zone.node), X = sx(p[0]), Y = sy(p[1]), radius = zone.radius_m * k;
+    g.fillStyle = "rgba(100,175,255,0.12)"; g.strokeStyle = "rgba(120,185,255,0.45)"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(X, Y, radius, 0, 2 * Math.PI); g.fill(); g.stroke();
+    phoneLabels.push({ x: X, y: Math.max(12, Y - radius - 12), lines: [zone.label] });
+  }
+  // SOS distance bands (rough range from the relay's Wi-Fi signal), under the pins.
+  for (const zone of zones.sos) {
+    const p = pos(zone.node), X = sx(p[0]), Y = sy(p[1]);
+    for (const band of zone.bands) {
+      g.fillStyle = C.bad; g.globalAlpha = 0.16;
+      g.beginPath(); g.arc(X, Y, band.outer * k, 0, 2 * Math.PI); g.arc(X, Y, band.inner * k, 0, 2 * Math.PI, true); g.fill();
+      g.strokeStyle = C.bad; g.globalAlpha = 0.5; g.lineWidth = 1; g.setLineDash([4, 4]);
+      g.beginPath(); g.arc(X, Y, band.outer * k, 0, 2 * Math.PI); g.stroke();
+      g.beginPath(); g.arc(X, Y, band.inner * k, 0, 2 * Math.PI); g.stroke();
+      g.setLineDash([]); g.globalAlpha = 1;
+    }
+  }
+  for (const zone of zones.sos) {
+    const p = pos(zone.node), nodeX = sx(p[0]), nodeY = sy(p[1]);
+    if (nodeX < 0 || nodeX > W || nodeY < 0 || nodeY > H) continue;
+    const X = Math.max(8, Math.min(W - 16, nodeX + 20));
+    const Y = Math.max(14, Math.min(H - 18, nodeY - 22));
+    // Stacked pins count reports at one relay zone, not separate phone positions.
+    for (let i = Math.min(3, zone.count) - 1; i >= 0; i--) {
+      const x = X + 3 * i, y = Y - 3 * i;
+      g.fillStyle = "#ff8b8b"; g.strokeStyle = "#0d1014"; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(x, y + 9); g.lineTo(x - 6, y); g.arc(x, y, 6, Math.PI, 2 * Math.PI); g.closePath(); g.fill(); g.stroke();
+    }
+    zoneOccupied.push({ x: X - 7, y: Y - 13, w: 20, h: 23 });
+    sosLabels.push({ x: X, y: Y, lines: [zone.label, ...zone.lines] });
+  }
+  // SOS descriptions take the available label space before phone counts.
+  if (PLAN.labels) for (const label of [...sosLabels, ...phoneLabels]) {
+    planZoneLabel(g, label.x, label.y, label.lines, zoneOccupied);
+  }
+  g.restore();
+  const health = d.health || {};
+  const hcol = (id) => ({ green: C.ok, amber: C.warn }[health[id]] || C.off);
+  let prev = [d.pose[0], d.pose[1]];
+  g.setLineDash([6, 8]); g.lineWidth = 3;
+  for (const id of CHAIN) {
+    const p = pos(id); if (!p) continue;
+    g.strokeStyle = hcol(id); g.beginPath(); g.moveTo(sx(prev[0]), sy(prev[1])); g.lineTo(sx(p[0]), sy(p[1])); g.stroke();
+    prev = p;
+  }
+  g.setLineDash([]);
+  // suggested relay spots
+  (d.relays || []).forEach((r, i) => {
+    g.strokeStyle = C.hazard; g.lineWidth = 3; g.setLineDash([4, 4]);
+    g.beginPath(); g.arc(sx(r.x), sy(r.y), 14, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]);
+    if (PLAN.labels) markerText(g, sx(r.x), sy(r.y), `place relay ${i + 1}`, occupied);
+  });
+  // relay nodes
+  for (const id of CHAIN) {
+    const p = pos(id); if (!p) continue;
+    g.fillStyle = hcol(id); g.globalAlpha = .3; g.beginPath(); g.arc(sx(p[0]), sy(p[1]), 12, 0, 2 * Math.PI); g.fill();
+    g.globalAlpha = 1; g.strokeStyle = hcol(id); g.lineWidth = 1.5; g.stroke();
+    if (PLAN.labels) markerText(g, sx(p[0]), sy(p[1]), id, occupied);
+  }
+  // spotter (handheld Pi + SP1)
+  const [px, py, th] = d.pose, X = sx(px), Y = sy(py);
+  const phi = Math.PI / 2 - th;              // th is clockwise from +y; canvas math wants counter-clockwise from +x
+  const ang = (a) => [X + Math.cos(phi + a) * 16, Y - Math.sin(phi + a) * 16];
+  g.fillStyle = C.warn; g.beginPath();
+  const tip = ang(0), l = ang(2.5), r = ang(-2.5);
+  g.moveTo(tip[0], tip[1]); g.lineTo(l[0], l[1]); g.lineTo(r[0], r[1]); g.closePath(); g.fill();
+  if (PLAN.labels) {
+    g.fillStyle = "#0b0d10"; g.font = "bold 8px sans-serif"; g.textAlign = "center";
+    g.fillText("SP1", X, Y + 3); g.textAlign = "left";
+  }
+  occupied.push({ x: X - 16, y: Y - 16, w: 32, h: 32 });
+  // Historic sightings stay visible as small dots. Fresh labels have a
+  // strict budget and share collision bounds with the spotter and controls.
+  const people = d.persons.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  for (const p of people) {
+    const fresh = freshPerson(p), col = p.ps === "D" ? C.bad : C.person, X = sx(p.x), Y = sy(p.y);
+    g.globalAlpha = fresh ? .35 : .25;
+    g.fillStyle = col; g.beginPath(); g.arc(X, Y, fresh ? 8 : 3.5, 0, 2 * Math.PI); g.fill();
+    // rq "tilt": first seen while the rig was tilted, range unsure: dashed outline.
+    if (fresh) { g.globalAlpha = 1; g.strokeStyle = col; g.lineWidth = 1.5; if (p.rq === "tilt") g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]); }
+    if (String(p.id) === PLAN.highlight) {
+      g.globalAlpha = 1; g.strokeStyle = C.info; g.lineWidth = 2;
+      g.beginPath(); g.arc(X, Y, 14, 0, 2 * Math.PI); g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+  const fresh = people.filter(freshPerson).sort((a, b) => (b.ps === "D") - (a.ps === "D") || a.age - b.age);
+  let labels = 0;
+  for (const p of fresh) {
+    if (PLAN.labels && markerText(g, sx(p.x), sy(p.y), String(p.id).slice(0, 6), occupied)) labels++;
+    if (labels >= 4) break;
+  }
+  // scale bar
+  const m = k >= 60 ? 1 : k >= 25 ? 2 : 5;
+  g.strokeStyle = "#cfd6dd"; g.lineWidth = 3; g.beginPath(); g.moveTo(16, H - 16); g.lineTo(16 + m * k, H - 16); g.stroke();
+  g.fillStyle = "#cfd6dd"; g.font = "13px sans-serif"; g.fillText(`${m} m`, 16, H - 22);
+}
+function planZoneLabel(g, x, y, lines, occupied) {
+  const W = g.canvas.clientWidth, H = g.canvas.clientHeight;
+  if (x < 0 || x > W || y < 0 || y > H) return false;
+  g.font = "bold 10px sans-serif";
+  const w = Math.max(...lines.map((text) => g.measureText(text).width)) + 10, h = lines.length * 13 + 8;
+  if (w > W - 16 || h > H - 16) return false;
+  const positions = [[x + 18, y - h - 16], [x - w / 2, y - h - 18], [x - w - 18, y - h - 16],
+                     [x + 18, y + 16], [x - w - 18, y + 16]];
+  // A bounded edge scan finds empty space in a crowded relay zone. Its leader
+  // identifies the zone; no label is allowed to cover primary marker bounds.
+  for (let row = 0; row < 8; row++) {
+    const top = 8 + row * Math.max(1, (H - h - 16) / 7);
+    positions.push([8, top], [W - w - 8, top]);
+  }
+  const overlaps = (a, b) => a.x < b.x + b.w + 3 && a.x + a.w + 3 > b.x && a.y < b.y + b.h + 3 && a.y + a.h + 3 > b.y;
+  let box;
+  for (const [left, top] of positions) {
+    const candidate = { x: Math.max(8, Math.min(W - w - 8, left)), y: Math.max(8, Math.min(H - h - 8, top)), w, h };
+    if (!occupied.some((other) => overlaps(candidate, other))) { box = candidate; break; }
+  }
+  if (!box) return false;
+  occupied.push(box);
+  g.strokeStyle = "rgba(195,215,235,0.55)"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(x, y);
+  g.lineTo(Math.max(box.x, Math.min(box.x + w, x)), Math.max(box.y, Math.min(box.y + h, y))); g.stroke();
+  g.fillStyle = "rgba(13,16,20,0.88)"; g.fillRect(box.x, box.y, w, h);
+  g.fillStyle = "#f4f6f8";
+  lines.forEach((text, i) => g.fillText(text, box.x + 5, box.y + 14 + 13 * i));
+  return true;
+}
+function markerText(g, x, y, text, occupied) {
+  g.font = "bold 10px sans-serif";
+  const w = g.measureText(text).width + 6, h = 14;
+  const W = g.canvas.clientWidth, H = g.canvas.clientHeight;
+  if (x < 0 || y < 0 || x > W || y > H) return false;
+  const overlaps = (a, b) => a.x < b.x + b.w + 3 && a.x + a.w + 3 > b.x && a.y < b.y + b.h + 3 && a.y + a.h + 3 > b.y;
+  const offsets = [[-w / 2, -h / 2], [-w / 2, -h - 10], [12, -h / 2], [-w - 12, -h / 2], [-w / 2, 12]];
+  let box;
+  for (const [dx, dy] of offsets) {
+    const candidate = { x: Math.max(8, Math.min(W - w - 8, x + dx)),
+                        y: Math.max(8, Math.min(H - h - 8, y + dy)), w, h };
+    if (!occupied.some((other) => overlaps(candidate, other))) { box = candidate; break; }
+  }
+  if (!box || w > W - 16) return false;
+  occupied.push(box);
+  g.fillStyle = "rgba(13,16,20,0.28)"; g.fillRect(box.x, box.y, w, h);
+  g.fillStyle = "#f4f6f8";
+  g.fillText(text, box.x + 3, box.y + 10);
+  return true;
+}
+function highlightPerson(id, scroll = false) {
+  PLAN.highlight = id == null ? null : String(id);
+  for (const [pid, row] of PLAN.rows) row.classList.toggle("selected", pid === PLAN.highlight);
+  if (scroll && PLAN.rows.has(PLAN.highlight)) PLAN.rows.get(PLAN.highlight).scrollIntoView({ block: "nearest" });
+  drawPlan();
+}
+function renderPlanPeople(persons) {
+  const sorted = [...persons].sort((a, b) => Number(freshPerson(b)) - Number(freshPerson(a)) ||
+    (b.ps === "D") - (a.ps === "D") || (a.age ?? Infinity) - (b.age ?? Infinity));
+  const list = $("plan-person-list"), live = new Set();
+  sorted.forEach((person, index) => {
+    const id = String(person.id); live.add(id);
+    let row = PLAN.rows.get(id);
+    if (!row) {
+      row = el("button", "plan-person"); row.type = "button"; row.dataset.person = id;
+      row.append(el("strong"), el("span"), el("span"));
+      row.addEventListener("pointerenter", () => highlightPerson(id));
+      row.addEventListener("focus", () => highlightPerson(id));
+      row.addEventListener("click", () => highlightPerson(id));
+      PLAN.rows.set(id, row);
+    }
+    row.className = `plan-person${person.ps === "D" ? " down" : ""}${freshPerson(person) ? "" : " old"}${id === PLAN.highlight ? " selected" : ""}`;
+    row.children[0].textContent = `P${id} · ${person.ps === "D" ? "Down" : person.ps === "U" ? "Upright" : "Unknown"}`;
+    const range = Number.isFinite(person.r) && person.r > 0 ? `${person.r.toFixed(1)} m${person.rs === "S" ? " est." : ""}` : "range unknown";
+    row.children[1].textContent = `${range}${person.rq === "tilt" ? " · range unsure (rig tilted)" : ""} · ${person.age == null ? "age unknown" : ageText(person.age)}`;
+    const source = { C: "Camera", T: "Thermal", CT: "Camera + thermal" }[person.src] ||
+      (person.src && person.src !== "-" ? person.src : "Source unknown");
+    row.children[2].textContent = `${source}${Number.isFinite(person.x) && Number.isFinite(person.y) ? "" : " · unlocated"}`;
+    if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+  });
+  for (const [id, row] of PLAN.rows) if (!live.has(id)) { row.remove(); PLAN.rows.delete(id); }
+  $("plan-person-count").textContent = `(${persons.length})`;
+  $("plan-person-empty").hidden = persons.length > 0;
+}
+async function refreshPlan() {
+  let d;
+  try { d = await (await fetch("/api/map", { cache: "no-store" })).json(); } catch (e) { return; }
+  PLAN.data = d;
+  renderPlanPeople(d.persons);
+  if (d.png && d.png.v !== PLAN.imgV) {
+    PLAN.imgV = d.png.v;
+    const img = new Image(); img.onload = () => { PLAN.img = img; drawPlan(); }; img.src = `/api/map.png?v=${d.png.v}`;
+  }
+  const fresh = d.persons.filter(freshPerson), people = fresh.length, down = fresh.filter((p) => p.ps === "D").length;
+  const earlier = d.persons.length - people;
+  const slam = d.slam ? `SLAM ${d.scans} scans${d.rejected ? `, ${d.rejected} rejected (tilt or poor match)` : ""}` : "live scan only (SLAM not loaded)";
+  const pb = $("plan-pause");
+  pb.textContent = d.paused ? "Resume map" : "Pause map";
+  pb.classList.toggle("active", !!d.paused);
+  pb.setAttribute("aria-pressed", d.paused ? "true" : "false");
+  $("plan-t").textContent = d.paused ? `Mapping paused (rig set down) · ${d.scans} scans · live view continues`
+    : d.scan_age == null ? "waiting for LiDAR"
+    : `${slam} · ${d.hz} Hz · ${people} live ${people === 1 ? "person" : "people"}${down ? ` (${down} down)` : ""}${earlier ? ` · ${earlier} earlier` : ""}${d.scan_ok === false ? ` · last scan skipped (${d.reject_reason})` : ""}${d.slam_error ? " · " + d.slam_error : ""}`;
+  $("plan-t").title = $("plan-t").textContent;
+  drawPlan();
+}
+async function planPost(url, body) {
+  try { await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }); } catch (e) { /* next poll shows the truth */ }
+  refreshPlan();
+}
+document.querySelectorAll("#plan-tools button[data-node]").forEach((b) => b.addEventListener("click", () => planPost(`/api/map/node/${b.dataset.node}`, { here: true })));
+$("plan-pause").addEventListener("click", () => planPost("/api/map/pause", { paused: $("plan-pause").getAttribute("aria-pressed") !== "true" }));
+$("plan-reset").addEventListener("click", () => { if (confirm("Start a new map and clear relay positions?")) { PLAN.manualView = null; PLAN.view = null; planPost("/api/map/reset"); } });
+$("plan-fit").addEventListener("click", () => { PLAN.manualView = null; PLAN.view = null; drawPlan(); });
+$("plan-labels").addEventListener("click", () => {
+  PLAN.labels = !PLAN.labels;
+  $("plan-labels").setAttribute("aria-pressed", String(PLAN.labels));
+  $("plan-labels").classList.toggle("active", PLAN.labels);
+  drawPlan();
+});
+$("plan-raw").addEventListener("click", () => {
+  if (!PLAN.data) return;
+  PLAN.rawScan = !showRawPlan(PLAN.data);
+  drawPlan();
+});
+$("plan-signal").addEventListener("click", () => {
+  PLAN.signal = !PLAN.signal;
+  try { localStorage.setItem("rn-plan-signal", PLAN.signal ? "on" : "off"); } catch (e) { /* keep the current viewer setting in memory */ }
+  signalControl();
+  drawPlan();
+});
+function manualPlanView(cx, cy, scale) {
+  const c = $("plan"), w = Math.max(1, c.clientWidth - 24) / scale, h = Math.max(1, c.clientHeight - 24) / scale;
+  PLAN.manualView = { x0: cx - w / 2, x1: cx + w / 2, y0: cy - h / 2, y1: cy + h / 2 };
+}
+function planPointer(e) {
+  const r = $("plan").getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+}
+function personAt(x, y) {
+  if (!PLAN.data || !PLAN.toScreen) return null;
+  let found = null, distance = 15;
+  for (const person of PLAN.data.persons) {
+    if (!Number.isFinite(person.x) || !Number.isFinite(person.y)) continue;
+    const [X, Y] = PLAN.toScreen(person.x, person.y), d = Math.hypot(X - x, Y - y);
+    if (d < distance) { found = String(person.id); distance = d; }
+  }
+  return found;
+}
+$("plan").addEventListener("wheel", (e) => {
+  if (!PLAN.toMap || PLAN.drag || PLAN.pan) return;
+  e.preventDefault();
+  const [x, y] = planPointer(e), [mx, my] = PLAN.toMap(x, y), c = $("plan");
+  const scale = Math.max(4, Math.min(1600, PLAN.scale * Math.exp(-Math.max(-300, Math.min(300, e.deltaY)) * .002)));
+  manualPlanView(mx - (x - c.clientWidth / 2) / scale, my + (y - c.clientHeight / 2) / scale, scale);
+  drawPlan();
+}, { passive: false });
+$("plan").addEventListener("pointerdown", (e) => {
+  const d = PLAN.data; if (e.button !== 0 || !d || !PLAN.toScreen) return;
+  const [x, y] = planPointer(e);
+  PLAN.start = [x, y]; PLAN.dragMoved = false;
+  $("plan").setPointerCapture(e.pointerId);
+  for (const id of CHAIN) {
+    const n = d.nodes[id]; if (!n) continue;
+    const [X, Y] = PLAN.toScreen(n.x, n.y);
+    if (Math.hypot(X - x, Y - y) < 16) { PLAN.drag = id; PLAN.dragPos = [n.x, n.y]; return; }
+  }
+  PLAN.pan = { center: [(PLAN.view.x0 + PLAN.view.x1) / 2, (PLAN.view.y0 + PLAN.view.y1) / 2], scale: PLAN.scale };
+  $("plan").style.cursor = "grabbing";
+});
+$("plan").addEventListener("pointermove", (e) => {
+  const [x, y] = planPointer(e);
+  if (!PLAN.drag && !PLAN.pan) {
+    const person = personAt(x, y);
+    if (person !== PLAN.highlight) highlightPerson(person);
+    return;
+  }
+  const dx = x - PLAN.start[0], dy = y - PLAN.start[1];
+  if (Math.hypot(dx, dy) < 3 && !PLAN.dragMoved) return;
+  PLAN.dragMoved = true;
+  if (PLAN.drag) PLAN.dragPos = PLAN.toMap(x, y);
+  else manualPlanView(PLAN.pan.center[0] - dx / PLAN.pan.scale, PLAN.pan.center[1] + dy / PLAN.pan.scale, PLAN.pan.scale);
+  drawPlan();
+});
+function finishPlanPointer(e, cancel = false) {
+  if (!PLAN.drag && !PLAN.pan) return;
+  const id = PLAN.drag, position = PLAN.dragPos, moved = PLAN.dragMoved;
+  PLAN.drag = null; PLAN.dragPos = null; PLAN.pan = null;
+  $("plan").style.cursor = "grab";
+  if ($("plan").hasPointerCapture(e.pointerId)) $("plan").releasePointerCapture(e.pointerId);
+  if (!cancel && id && moved) planPost(`/api/map/node/${id}`, { x: position[0], y: position[1] });
+  else if (!cancel && !moved) highlightPerson(personAt(...planPointer(e)), true);
+  drawPlan();
+}
+$("plan").addEventListener("pointerup", (e) => finishPlanPointer(e));
+$("plan").addEventListener("pointercancel", (e) => finishPlanPointer(e, true));
+$("plan").addEventListener("lostpointercapture", (e) => finishPlanPointer(e, true));
+if (window.ResizeObserver) new ResizeObserver(drawPlan).observe($("planwrap"));
+window.addEventListener("resize", drawPlan);
+refreshPlan();
+setInterval(refreshPlan, 500);
+</script>
+<!-- 3D point cloud + people (codex_02). Optional: without these files the pane keeps the LiDAR view. -->
+<script src="/static/vendor/three.min.js" onerror="void 0"></script>
+<script src="/static/view3d.js" onerror="void 0"></script>
+</body>
+</html>
