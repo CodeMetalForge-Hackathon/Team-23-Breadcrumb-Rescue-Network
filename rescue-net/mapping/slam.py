@@ -23,6 +23,10 @@ disable that bound, or supply the installation's conservative minimum height.
 The carried-rig default ``min_range=0.6`` also excludes close operator/body
 returns from matching and mapping. It is an explicit range setting, not an
 inferred body mask, and can be overridden for a different unobstructed mount.
+Call ``set_mapping_enabled(False)`` before placing the carried rig on the floor;
+height cannot be inferred from this IMU. While paused, scans do not change the
+accepted pose or map. Resume only at the same known pose, or start a new mapper
+if the sensor was moved: enabling mapping does not relocalize it automatically.
 
 ``grid()`` returns ``(uint8_array, (xmin, ymin), resolution)``. The array is
 indexed [iy, ix], row zero is the minimum world y, and values are exactly 0
@@ -86,6 +90,15 @@ class Slam2D:
     The map is fixed-size and centred on the seed. It does not resize or reset
     automatically when tracking is lost. Motion search is limited to 2 m and
     60 degrees around a bounded prediction; long outages may need a new mapper.
+
+    Mapping starts enabled. ``set_mapping_enabled(False)`` explicitly freezes
+    localization and map integration, for example during floor placement of a
+    rig calibrated for carrying. Paused updates count as rejected and return
+    ``reason='mapping_paused'`` even for malformed input. Resuming clears motion
+    prediction, retaining the accepted input clock, pose, path and map.
+    Its first valid scan uses the nominal local search around the last pose;
+    this does not recover an unknown relocation. ``to_map`` continues to use
+    that last pose, which is stale if the sensor moved while paused.
     """
 
     def __init__(self, res=.05, size_m=40, min_range=.6, max_range=12, *,
@@ -122,6 +135,8 @@ class Slam2D:
         self._velocity = np.zeros(3, dtype=np.float64)
         self._last_explicit_time = None
         self._rejected = 0
+        self._mapping_enabled = True
+        self._resume_pending = False
         self._lock = threading.RLock()
 
         # One broad likelihood field serves all search levels. Squaring its
@@ -152,6 +167,33 @@ class Slam2D:
         """Number of update calls rejected since construction."""
         with self._lock:
             return self._rejected
+
+    @property
+    def mapping_enabled(self):
+        """Whether scans may update the accepted pose and map."""
+        with self._lock:
+            return self._mapping_enabled
+
+    def set_mapping_enabled(self, enabled):
+        """Pause/resume mapping atomically with respect to complete updates.
+
+        Requires a boolean. An in-flight update finishes before this call
+        returns; subsequent paused updates preserve accepted state. Repeating
+        the current setting is a no-op. Resuming clears velocity and requests
+        nominal local matching for the next accepted scan. Stale timestamps
+        remain rejected; a rejected scan does not consume the resume state.
+        The map is retained without assuming the sensor returned to it.
+        """
+        if not isinstance(enabled, (bool, np.bool_)):
+            raise TypeError("mapping enabled must be a boolean")
+        enabled = bool(enabled)
+        with self._lock:
+            if enabled == self._mapping_enabled:
+                return
+            if enabled:
+                self._velocity[:] = 0.
+                self._resume_pending = True
+            self._mapping_enabled = enabled
 
     def grid(self):
         """Return a uint8 map snapshot, lower-left world origin, and metres/cell."""
@@ -245,6 +287,8 @@ class Slam2D:
     def update(self, ang_deg, dist_mm, t=None, acc=None):
         """Match one complete scan and integrate it only on acceptance."""
         with self._lock:
+            if not self._mapping_enabled:
+                return self._result(False, reason="mapping_paused")
             reason = self._tilt_reason(acc)
             if reason:
                 return self._result(False, reason=reason)
@@ -259,6 +303,8 @@ class Slam2D:
                 if dt <= 0:
                     return self._result(False, reason="non_monotonic_time")
             else:
+                dt = .1
+            if self._resume_pending:
                 dt = .1
             points, reason = self._points(ang_deg, dist_mm, self._trusted_range(acc))
             if reason:
@@ -308,6 +354,7 @@ class Slam2D:
             else:
                 self._velocity[:] = 0.
             self._last_explicit_time = stamp if t is not None else None
+            self._resume_pending = False
             self._path.append((stamp, *self.pose))
             return self._result(True, score, "seed" if len(self._path) == 1 else "matched")
 

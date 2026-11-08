@@ -1,6 +1,8 @@
 """Mapper robustness beyond the independent trajectory acceptance tests."""
 
 import math
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
@@ -239,3 +241,138 @@ def test_floor_filter_does_not_bypass_whole_scan_tilt_gate():
 def test_invalid_floor_calibration_is_rejected(kwargs):
     with pytest.raises(ValueError):
         Slam2D(**kwargs)
+
+
+def test_pause_before_seed_rejects_even_malformed_input_without_mutation():
+    slam = Slam2D()
+    assert slam.mapping_enabled is True
+    slam.set_mapping_enabled(False)
+    assert slam.mapping_enabled is False
+    for angles, distances, stamp, acc in [
+        (*room_scan(), 0., None),
+        ([], [], float("nan"), "invalid"),
+        (None, None, "bad", (0, 0, 0)),
+    ]:
+        result = slam.update(angles, distances, t=stamp, acc=acc)
+        assert result == dict(x=0., y=0., th=0., ok=False, score=0.,
+                              reason="mapping_paused")
+    assert slam.rejected == 3
+    assert slam.path == []
+    assert np.all(slam.grid()[0] == 127)
+    assert np.count_nonzero(slam._field) == 0
+    assert slam._last_explicit_time is None
+    slam.set_mapping_enabled(True)
+    assert slam.update(*room_scan(), t=0.)["reason"] == "seed"
+    assert slam.rejected == 3
+
+
+def test_pause_preserves_accepted_state_and_resume_restarts_local_prediction(monkeypatch):
+    slam = Slam2D()
+    current_pose = (.08, .10, .03)
+    assert slam.update(*room_scan(), t=100.)["ok"]
+    assert slam.update(*room_scan(current_pose), t=100.1)["ok"]
+    assert np.linalg.norm(slam._velocity) > .1
+    pose, path = slam.pose, slam.path
+    evidence, field = slam._evidence.copy(), slam._field.copy()
+    velocity, stamp = slam._velocity.copy(), slam._last_explicit_time
+    slam.set_mapping_enabled(False)
+    for scan, t in [(room_scan((3., 2., 1.)), 500.), (([], []), -1.)]:
+        assert slam.update(*scan, t=t)["reason"] == "mapping_paused"
+        assert slam.pose == pose and slam.path == path
+        assert slam._last_explicit_time == stamp
+        np.testing.assert_array_equal(slam._velocity, velocity)
+        np.testing.assert_array_equal(slam._evidence, evidence)
+        np.testing.assert_array_equal(slam._field, field)
+    slam.set_mapping_enabled(True)
+    assert slam.mapping_enabled is True
+    assert slam.pose == pose and slam.path == path
+    np.testing.assert_array_equal(slam._evidence, evidence)
+    np.testing.assert_array_equal(slam._field, field)
+    assert slam._last_explicit_time == stamp
+    np.testing.assert_array_equal(slam._velocity, 0.)
+    # Invalid and stale scans must neither advance the clock nor consume the
+    # one-shot nominal search reserved for the next accepted resumed scan.
+    assert not slam.update([], [], t=1000.)["ok"]
+    for stale in (0., stamp):
+        result = slam.update(*room_scan(current_pose), t=stale)
+        assert result["reason"] == "non_monotonic_time"
+    assert slam._last_explicit_time == stamp
+    assert slam._resume_pending
+    assert slam.pose == pose and slam.path == path
+    np.testing.assert_array_equal(slam._evidence, evidence)
+    np.testing.assert_array_equal(slam._field, field)
+    original_match = slam._match
+    matched = []
+
+    def capture_match(points, dt):
+        matched.append((dt, slam._velocity.copy()))
+        return original_match(points, dt)
+
+    monkeypatch.setattr(slam, "_match", capture_match)
+    result = slam.update(*room_scan(current_pose), t=200.)
+    assert result["ok"] and result["reason"] == "matched"
+    assert len(matched) == 1 and matched[0][0] == .1
+    np.testing.assert_array_equal(matched[0][1], 0.)
+    assert np.linalg.norm(np.asarray(slam.pose[:2]) - current_pose[:2]) < .1
+    assert slam.path[:-1] == path and slam.path[-1][0] == 200.
+    assert not slam._resume_pending
+    assert slam.rejected == 5
+    assert slam.update(*room_scan(current_pose), t=200.)["reason"] == "non_monotonic_time"
+    assert slam.update(*room_scan(current_pose), t=200.3)["ok"]
+    assert len(matched) == 2 and matched[1][0] == pytest.approx(.3)
+
+
+def test_repeated_enable_does_not_reset_an_active_stream():
+    slam = Slam2D()
+    assert slam.update(*room_scan(), t=10.)["ok"]
+    assert slam.update(*room_scan((.05, .08, .02)), t=10.1)["ok"]
+    before = slam._velocity.copy()
+    slam.set_mapping_enabled(True)
+    np.testing.assert_array_equal(slam._velocity, before)
+    assert slam.update(*room_scan(), t=0.)["reason"] == "non_monotonic_time"
+    assert len(slam.path) == 2
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "false", [], float("nan")])
+def test_pause_control_rejects_nonboolean_values_without_changing_state(value):
+    slam = Slam2D()
+    with pytest.raises(TypeError, match="boolean"):
+        slam.set_mapping_enabled(value)
+    assert slam.mapping_enabled is True
+    assert slam.rejected == 0
+    assert slam.path == []
+
+
+def test_pause_waits_for_inflight_integration_and_blocks_later_updates(monkeypatch):
+    slam = Slam2D()
+    integrating, release = threading.Event(), threading.Event()
+    pausing = threading.Event()
+    original_integrate = slam._integrate
+
+    def blocked_integrate(points, pose):
+        integrating.set()
+        assert release.wait(2.), "test did not release in-flight update"
+        original_integrate(points, pose)
+
+    def pause():
+        pausing.set()
+        slam.set_mapping_enabled(False)
+
+    monkeypatch.setattr(slam, "_integrate", blocked_integrate)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending_update = pool.submit(slam.update, *room_scan(), t=0.)
+        try:
+            assert integrating.wait(2.)
+            pending_pause = pool.submit(pause)
+            assert pausing.wait(2.)
+            assert not pending_pause.done()
+        finally:
+            release.set()
+        assert pending_update.result(timeout=2.)["ok"]
+        pending_pause.result(timeout=2.)
+    assert slam.mapping_enabled is False
+    assert len(slam.path) == 1
+    before = slam.grid()[0]
+    assert slam.update(*room_scan((1., 0., 0.)), t=1.)["reason"] == "mapping_paused"
+    assert len(slam.path) == 1 and slam.rejected == 1
+    np.testing.assert_array_equal(slam.grid()[0], before)

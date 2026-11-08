@@ -77,6 +77,32 @@ returns and scan distortion can still corrupt the map. Setting
 additional cap; the configured `max_range` still applies. The 10-degree
 whole-scan tilt rejection remains in force when acceleration is supplied.
 
+Pause mapping explicitly **before placing the carried rig on the floor**:
+
+```python
+slam.set_mapping_enabled(False)
+enabled = slam.mapping_enabled  # Read-only boolean; False after the call.
+# After restoring the same known position, orientation, and sensor setup:
+slam.set_mapping_enabled(True)
+```
+
+Mapping starts enabled. The caller must invoke this control; the mapper does
+not infer sensor height or detect floor placement. The default 1.0 m height
+still requires the corresponding physical setup. Disabling the floor-range
+cap with `sensor_height_m=None` does not make floor placement safe for mapping.
+While paused, each `update` returns `ok=False`, `reason="mapping_paused"`, and
+increments `rejected`, while preserving the accepted pose, path, and grid.
+`to_map` continues to use that last pose, which becomes stale if the sensor moves.
+
+Resume clears velocity prediction and uses the nominal local search until the
+first resumed scan is accepted; rejected scans do not consume this one-shot
+resume state. The last accepted timestamp is retained, so resumed explicit
+timestamps must still be newer than that timestamp. Enabling mapping does not
+verify the sensor's location or relocalize it automatically. Resume the existing
+map only at its last known position and orientation with the correct sensor
+configuration. If the sensor moved and that pose cannot be restored, start a
+fresh mapper instead of continuing the old map at an assumed pose.
+
 The default map is a fixed 40 m square centred on the seed. Matching uses an
 accumulated field of mostly static structure; there is no global loop closure
 or automatic map resizing. Featureless corridors, repeated geometry, moving
