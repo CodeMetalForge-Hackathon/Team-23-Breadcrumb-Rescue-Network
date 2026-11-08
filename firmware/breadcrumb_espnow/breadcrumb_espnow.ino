@@ -200,6 +200,158 @@ static void sendRaw(const char* s, int len) {
   esp_now_send(BROADCAST, (const uint8_t*)s, len);
 }
 
+// ---- bulk link (camera / thermal / LiDAR): Pi --Wi-Fi UDP--> B2 --ESP-NOW unicast--> B1 --> BASE ----
+// Binary frames, first byte 0xB7 (mesh JSON always starts with '{'):
+//   beacon: B7 00 <code>                                   every node, every 2 s (next-hop discovery)
+//   chunk : B7 01 <hop> <kind> <seq lo hi> <idx lo hi> <cnt lo hi> payload   hop = code of the sender
+// Codes: BASE 0, B1 1, B2 2, Pi 3. A chunk always moves to a lower code: the next lower node if it was
+// heard in the last 6 s, otherwise the lowest node heard (B1 down -> B2 sends straight to BASE).
+// Unicast, so the radio retries lost frames; alerts keep using the flooding mesh (and LoRa) above.
+#include <WiFiUdp.h>
+#include "mbedtls/base64.h"
+#ifndef HAS_LINK_AP
+#define HAS_LINK_AP (__builtin_strcmp(NODE_ID, "B2") == 0)
+#endif
+static const uint8_t BULK_MAGIC = 0xB7;
+static const char* LINK_SSID = "RESCUE-LINK";      // hidden, WPA2: only the spotter Pi joins it
+static const char* LINK_PASS = "breadcrumb-link";
+static const uint16_t LINK_PORT = 5005;
+static const uint32_t BEACON_MS = 2000, NB_ALIVE_MS = 6000;
+static const int BULK_Q = 48, NB_MAX = 4;
+struct Nb { uint8_t mac[6]; volatile uint32_t seen; volatile int rssi; bool peer; };
+static Nb nb[NB_MAX];
+struct Bulk { uint8_t d[MAX_LEN]; uint8_t len; };
+static Bulk bulkIn[BULK_Q], bulkOut[BULK_Q];
+static volatile int binHead = 0, binTail = 0;
+static int boutHead = 0, boutTail = 0;
+static portMUX_TYPE bulkMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool bulkInflight = false;
+static uint32_t bulkSentAt = 0, lastBeacon = 0;
+static uint32_t bulkRx = 0, bulkFwd = 0, bulkDrop = 0, bulkFail = 0;
+static int bulkVia = -1;
+static WiFiUDP linkUdp;
+
+static int myCode() {
+  if (isCP) return 0;
+  if (strcmp(NODE_ID, "B1") == 0) return 1;
+  if (strcmp(NODE_ID, "B2") == 0) return 2;
+  return 9;
+}
+
+// called from the Wi-Fi task (ESP-NOW receive callback)
+static void bulkOnRecv(const uint8_t* mac, const uint8_t* data, int len, int rssi) {
+  if (len == 3 && data[1] == 0) {
+    int c = data[2];
+    if (c < NB_MAX && mac) { memcpy(nb[c].mac, mac, 6); nb[c].seen = millis(); nb[c].rssi = rssi; }
+    return;
+  }
+  if (len < 10 || data[1] != 1) return;
+  portENTER_CRITICAL_ISR(&bulkMux);
+  int next = (binHead + 1) % BULK_Q;
+  if (next != binTail) {
+    memcpy(bulkIn[binHead].d, data, len);
+    bulkIn[binHead].len = len;
+    binHead = next;
+  } else bulkDrop++;
+  portEXIT_CRITICAL_ISR(&bulkMux);
+}
+
+static void bulkOnSent(const esp_now_send_info_t* info, esp_now_send_status_t st) {
+  if (st != ESP_NOW_SEND_SUCCESS) bulkFail++;
+  bulkInflight = false;
+}
+
+static int nextHop() {
+  int mine = myCode();
+  uint32_t now = millis();
+  auto alive = [&](int c) { return nb[c].seen && now - nb[c].seen < NB_ALIVE_MS; };
+  if (mine >= 1 && alive(mine - 1)) return mine - 1;       // the chain: next node toward BASE
+  for (int c = 0; c < mine && c < NB_MAX; c++) if (alive(c)) return c;   // skip a dead node
+  return -1;
+}
+
+static void bulkQueueOut(const uint8_t* d, int len) {
+  int next = (boutHead + 1) % BULK_Q;
+  if (next == boutTail) { bulkDrop++; return; }
+  memcpy(bulkOut[boutHead].d, d, len);
+  bulkOut[boutHead].len = len;
+  boutHead = next;
+}
+
+static void bulkHandle(uint8_t* d, int len) {
+  int hop = d[2], mine = myCode();
+  if (mine >= hop) return;                                   // only ever toward BASE
+  bulkRx++;
+  if (isCP) {
+    static uint32_t recent[32];                              // radio retries can deliver a frame twice
+    static int rn = 0;
+    uint32_t key = ((uint32_t)d[3] << 24) ^ ((uint32_t)(d[4] | d[5] << 8) << 10) ^ (uint32_t)(d[6] | d[7] << 8);
+    for (uint32_t k : recent) if (k == key) return;
+    recent[rn] = key; rn = (rn + 1) % 32;
+    static unsigned char b64[340];
+    size_t olen = 0;
+    if (mbedtls_base64_encode(b64, sizeof(b64), &olen, d + 10, len - 10) != 0) return;
+    b64[olen] = 0;
+    Serial.printf("$B %u %u %u %u %s\n", d[3], d[4] | d[5] << 8, d[6] | d[7] << 8, d[8] | d[9] << 8, b64);
+    return;
+  }
+  d[2] = mine;
+  bulkQueueOut(d, len);
+}
+
+static void bulkLoop() {
+  uint32_t now = millis();
+  if (now - lastBeacon >= BEACON_MS) {                       // beacon: "I am code N" (BASE included)
+    lastBeacon = now;
+    uint8_t b[3] = {BULK_MAGIC, 0, (uint8_t)myCode()};
+    esp_now_send(BROADCAST, b, 3);
+  }
+  for (int c = 0; c < NB_MAX; c++) {                         // unicast needs a registered peer
+    if (nb[c].seen && !nb[c].peer) {
+      esp_now_peer_info_t peer = {};
+      memcpy(peer.peer_addr, nb[c].mac, 6);
+      peer.channel = 0;
+      peer.ifidx = WIFI_IF_STA;
+      peer.encrypt = false;
+      nb[c].peer = esp_now_add_peer(&peer) == ESP_OK || esp_now_is_peer_exist(nb[c].mac);
+    }
+  }
+  if (HAS_LINK_AP) {                                         // chunks from the Pi over Wi-Fi
+    for (int i = 0; i < 8; i++) {
+      int n = linkUdp.parsePacket();
+      if (n <= 0) break;
+      uint8_t buf[MAX_LEN];
+      int len = linkUdp.read(buf, sizeof(buf));
+      if (len >= 10 && buf[0] == BULK_MAGIC && buf[1] == 1) { buf[2] = 3; bulkHandle(buf, len); }
+    }
+  }
+  while (true) {                                             // chunks from the mesh
+    Bulk b;
+    bool have = false;
+    portENTER_CRITICAL(&bulkMux);
+    if (binTail != binHead) { b = bulkIn[binTail]; binTail = (binTail + 1) % BULK_Q; have = true; }
+    portEXIT_CRITICAL(&bulkMux);
+    if (!have) break;
+    bulkHandle(b.d, b.len);
+  }
+  if (boutTail != boutHead && (!bulkInflight || now - bulkSentAt > 60)) {
+    int nh = nextHop();
+    if (nh < 0 || !nb[nh].peer) {                            // nobody to send to: drop stale chunks
+      boutTail = (boutTail + 1) % BULK_Q;
+      bulkDrop++;
+      return;
+    }
+    bulkVia = nh;
+    Bulk& b = bulkOut[boutTail];
+    if (esp_now_send(nb[nh].mac, b.d, b.len) == ESP_OK) {
+      bulkInflight = true;
+      bulkSentAt = now;
+      boutTail = (boutTail + 1) % BULK_Q;
+      bulkFwd++;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
@@ -209,6 +361,14 @@ static void onRecv(const uint8_t* mac, const uint8_t* data, int len) {
   int rssi = 0;
 #endif
   if (len <= 0 || len > MAX_LEN) return;
+  if (data[0] == BULK_MAGIC) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    bulkOnRecv(info->src_addr, data, len, rssi);
+#else
+    bulkOnRecv(mac, data, len, rssi);
+#endif
+    return;
+  }
   portENTER_CRITICAL_ISR(&rxMux);
   int next = (rxHead + 1) % QUEUE_SIZE;
   if (next != rxTail) {
@@ -421,6 +581,11 @@ static void drawScreen() {
   tft.printf("%s<%s", lastType, lastFrom);
   tft.setCursor(4, 112);
   if (lastRssi) tft.printf("RSSI %d dBm", lastRssi);
+  tft.setTextColor(ST77XX_YELLOW);
+  static const char* const CODE_NAME[] = {"BASE", "B1", "B2", "Pi"};
+  tft.setCursor(156, 90);
+  if (bulkRx || bulkFwd) tft.printf("b>%s", isCP ? "USB" : (bulkVia < 0 ? "-" : CODE_NAME[bulkVia]));
+  tft.setTextColor(ST77XX_WHITE);
   if (HAS_PORTAL) {
     tft.setCursor(170, 112);
     tft.setTextColor(ST77XX_ORANGE);
@@ -457,6 +622,9 @@ void setup() {
   if (HAS_PORTAL) {
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(PORTAL_SSID, nullptr, WIFI_CHANNEL);  // open network, same channel as ESP-NOW
+  } else if (HAS_LINK_AP) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(LINK_SSID, LINK_PASS, WIFI_CHANNEL, 1 /*hidden*/, 2);  // the spotter Pi's bulk uplink
   } else {
     WiFi.mode(WIFI_STA);
   }
@@ -470,6 +638,7 @@ void setup() {
     while (true) delay(1000);
   }
   esp_now_register_recv_cb(onRecv);
+  esp_now_register_send_cb(bulkOnSent);
 
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, BROADCAST, 6);
@@ -495,6 +664,10 @@ void setup() {
   }
 
   if (HAS_PORTAL) portalBegin();
+  if (HAS_LINK_AP) {
+    linkUdp.begin(LINK_PORT);
+    Serial.printf("# link AP %s on %s udp %u\n", LINK_SSID, WiFi.softAPIP().toString().c_str(), LINK_PORT);
+  }
 
   randomSeed(esp_random());
   lastHeartbeat = millis() - HEARTBEAT_MS + random(1000, 4000);  // first HB soon, nodes staggered
@@ -532,6 +705,7 @@ static void readSerialCommands() {
 
 void loop() {
   if (isCP) readSerialCommands();
+  bulkLoop();
   if (HAS_PORTAL) {
     dns.processNextRequest();
     web.handleClient();

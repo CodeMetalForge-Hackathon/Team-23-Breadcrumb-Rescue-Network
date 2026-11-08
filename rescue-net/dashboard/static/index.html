@@ -114,6 +114,19 @@ button.reply:hover { background: var(--ok); color: var(--bg); }
 .card.fresh { animation: flash 1s ease-in-out 3; }
 @keyframes flash { 50% { box-shadow: 0 0 0 5px var(--c); } }
 
+
+/* spotter live view (bulk link through the relay mesh) */
+section.left { overflow-y: auto; }
+#remote { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+#remote figure { margin: 0; }
+#remote img, #remote canvas { width: 100%; display: block; background: #000; border-radius: 8px; aspect-ratio: 4 / 3; object-fit: contain; }
+#remote canvas { aspect-ratio: 1 / 1; }
+#remote figcaption { font-size: 16px; color: var(--muted); margin-top: 4px; }
+#remote figcaption.stale { color: var(--warn); }
+h2.sub-h { margin-top: 18px; }
+h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 15px; }
+#rstats { font-size: 15px; color: var(--muted); margin-top: 6px; }
+
 @media (max-width: 1000px) {
   main { grid-template-columns: 1fr; }
   #feed { overflow: visible; }
@@ -132,7 +145,7 @@ button.reply:hover { background: var(--ok); color: var(--bg); }
   <div id="clock">--:--:--</div>
 </header>
 <main>
-  <section>
+  <section class="left">
     <h2>Floor plan</h2>
     <svg id="map" viewBox="0 0 1000 400" role="img" aria-label="Floor plan with radio nodes"></svg>
     <div class="legend">
@@ -142,6 +155,13 @@ button.reply:hover { background: var(--ok); color: var(--bg); }
     </div>
     <div id="others"></div>
     <div id="stats"></div>
+    <h2 class="sub-h">Spotter live view <small>over our relay chain, no outside network</small></h2>
+    <div id="remote">
+      <figure><img id="rcam" alt="Spotter camera"><figcaption id="rcam-t">Camera: waiting for the first frame</figcaption></figure>
+      <figure><img id="rthermal" alt="Spotter thermal camera"><figcaption id="rthermal-t">Thermal: waiting</figcaption></figure>
+      <figure><canvas id="rlidar" width="400" height="400"></canvas><figcaption id="rlidar-t">LiDAR room outline: waiting</figcaption></figure>
+    </div>
+    <div id="rstats"></div>
   </section>
   <section>
     <h2>Alerts</h2>
@@ -491,6 +511,54 @@ tick();
 setInterval(tick, 1000);
 refresh();
 setInterval(refresh, 1000);
+
+// ---- spotter live view: camera / thermal JPEGs and LiDAR outline sent over the bulk link ----
+const remoteSeq = {};
+function ageText(a) { return a == null ? "" : a < 1.5 ? "just now" : `${Math.round(a)} s ago`; }
+function drawLidar(mm) {
+  const c = $("rlidar"), g = c.getContext("2d"), W = c.width, C = W / 2;
+  const css = getComputedStyle(document.documentElement);
+  const pts = mm.map((d, i) => [i, d]).filter(([, d]) => d > 0);
+  const far = pts.length ? Math.max(...pts.map(([, d]) => d)) : 6000;
+  const maxM = Math.min(12, Math.max(3, Math.ceil(far / 1000)));
+  const k = (C - 10) / (maxM * 1000);
+  g.fillStyle = "#000"; g.fillRect(0, 0, W, W);
+  g.strokeStyle = "#333"; g.fillStyle = "#777"; g.font = "13px sans-serif"; g.lineWidth = 1;
+  for (let r = 1; r <= maxM; r++) {
+    g.beginPath(); g.arc(C, C, r * 1000 * k, 0, 2 * Math.PI); g.stroke();
+    g.fillText(`${r} m`, C + 3, C - r * 1000 * k + 13);
+  }
+  g.fillStyle = css.getPropertyValue("--ok") || "#22c55e";
+  for (const [deg, d] of pts) {
+    const t = deg * Math.PI / 180;
+    g.fillRect(C + Math.sin(t) * d * k - 2, C - Math.cos(t) * d * k - 2, 4, 4);
+  }
+  g.fillStyle = css.getPropertyValue("--warn") || "#f5a524";
+  g.beginPath(); g.arc(C, C, 6, 0, 2 * Math.PI); g.fill();
+  g.strokeStyle = g.fillStyle; g.lineWidth = 3; g.beginPath(); g.moveTo(C, C); g.lineTo(C, C - 22); g.stroke();
+}
+async function refreshRemote() {
+  let r;
+  try { r = await (await fetch("/api/remote", { cache: "no-store" })).json(); } catch (e) { return; }
+  for (const name of ["camera", "thermal"]) {
+    const it = r[name], id = name === "camera" ? "rcam" : "rthermal";
+    const label = name === "camera" ? "Camera" : "Thermal (bright = warm)";
+    if (it.seq != null && it.seq !== remoteSeq[name]) { remoteSeq[name] = it.seq; $(id).src = `/api/remote/${name}.jpg?s=${it.seq}`; }
+    const t = $(id + "-t");
+    t.textContent = it.seq == null ? `${label}: waiting${it.partial ? ` (${it.partial} chunks)` : ""}`
+      : `${label} · ${ageText(it.age)} · ${(it.bytes / 1024).toFixed(1)} KB`;
+    t.classList.toggle("stale", it.age != null && it.age > 10);
+  }
+  const li = r.lidar, lt = $("rlidar-t");
+  if (li.mm && li.seq !== remoteSeq.lidar) { remoteSeq.lidar = li.seq; drawLidar(li.mm); }
+  lt.textContent = li.seq == null ? "LiDAR room outline: waiting" : `LiDAR room outline (top view, 1 m rings) · ${ageText(li.age)}`;
+  lt.classList.toggle("stale", li.age != null && li.age > 10);
+  const lost = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].lost, 0);
+  const ok = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].ok, 0);
+  $("rstats").textContent = `Bulk link ${r.kbps} kbps · ${ok} objects received, ${lost} incomplete`;
+}
+refreshRemote();
+setInterval(refreshRemote, 1000);
 </script>
 </body>
 </html>

@@ -17,6 +17,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, request, send_from_directory
 
 from common import jsonlog
+from dashboard.remote import Remote
 from common.protocol import extract_message, parse_line
 
 log = logging.getLogger("dashboard")
@@ -49,6 +50,7 @@ class State:
         self.source = ""
         self.stats = {"received": 0, "duplicates": 0, "ignored": 0}
         self.sender = None                        # callable(line: str) -> None, set by a source that can write
+        self.remote = Remote()                    # camera / thermal / LiDAR from the spotter, via the bulk link
 
     def set_source(self, connected, source):
         with self.lock:
@@ -139,6 +141,9 @@ class State:
 
 
 def handle_line(state, raw, record=True):
+    if (raw[:2] == b"$B") if isinstance(raw, bytes) else raw.startswith("$B"):   # bulk-link chunk
+        state.remote.add(raw.decode("ascii", "replace") if isinstance(raw, bytes) else raw)
+        return
     msg = extract_message(parse_line(raw))
     if msg is None:                   # non-JSON, other teams' packets, or board status like {"sent":..}
         text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
@@ -280,6 +285,17 @@ def create_app(state):
     @app.get("/api/state")
     def api_state():
         return jsonify(state.snapshot())
+
+    @app.get("/api/remote")
+    def api_remote():
+        return jsonify(state.remote.snapshot())
+
+    @app.get("/api/remote/<name>.jpg")
+    def api_remote_img(name):
+        data = state.remote.image(name)
+        if data is None or name == "lidar":
+            abort(404)
+        return app.response_class(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.post("/api/ack/<key>")
     def api_ack(key):

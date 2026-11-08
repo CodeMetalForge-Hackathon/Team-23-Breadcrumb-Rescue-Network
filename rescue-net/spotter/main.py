@@ -25,6 +25,7 @@ def parse_args():
     p.add_argument("--port", help="serial port of the ESP32 (default: config serial_port, else auto-detect)")
     p.add_argument("--no-debugview", action="store_true")
     p.add_argument("--no-extra-sensors", action="store_true", help="do not show the USB thermal camera / LiDAR in the debug view")
+    p.add_argument("--no-bulk", action="store_true", help="do not send camera / thermal / LiDAR over the bulk link (B2 Wi-Fi)")
     p.add_argument("--config", default=str(DEFAULT_PATH))
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging (incl. lines the ESP32 prints)")
     return p.parse_args()
@@ -73,7 +74,10 @@ def main():
     sink = build_sink(args, cfg)
     view = None if args.no_debugview else debugview.start(cfg["debug_port"])
     if view is not None and not args.no_extra_sensors:
-        add_extra_views(view)
+        cam, lid = add_extra_views(view)
+        if not args.no_bulk:
+            from spotter.bulklink import BulkLink
+            BulkLink(view, cam, lid).start()
     thermal.start()
 
     debouncer = Debouncer(cooldown_s=cfg["cooldown_s"])
