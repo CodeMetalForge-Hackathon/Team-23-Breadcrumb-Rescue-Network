@@ -77,7 +77,8 @@ def main():
         cam, lid = add_extra_views(view)
         if not args.no_bulk:
             from spotter.bulklink import BulkLink
-            BulkLink(view, cam, lid).start()
+            BulkLink(view, cam, lid, period=float(cfg.data.get("bulk_period", 0.25)),
+                     gap_s=float(cfg.data.get("bulk_gap", 0.003))).start()
     thermal.start()
 
     debouncer = Debouncer(cooldown_s=cfg["cooldown_s"])

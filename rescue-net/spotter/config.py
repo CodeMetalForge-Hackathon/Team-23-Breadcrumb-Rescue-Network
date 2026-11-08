@@ -17,6 +17,7 @@ DEFAULTS = {
     "cooldown_s": 10, "hb_interval_s": 15,
     "serial_port": "", "baud": 115200, "debug_port": 8080,
     "down_angle_deg": 55, "down_aspect": 1.3,      # posture: torso this far from vertical (or box this wide) = on the ground
+    "bulk_period": 0.25, "bulk_gap": 0.003,        # live view over B2 Wi-Fi: seconds per round, seconds between chunks
 }
 
 

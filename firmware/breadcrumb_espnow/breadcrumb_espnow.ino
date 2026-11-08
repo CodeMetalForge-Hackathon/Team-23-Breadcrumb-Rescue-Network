@@ -109,7 +109,7 @@ static int seenNext = 0;
 static bool isCP = false;
 static bool demoTopology = true;
 static uint32_t lastHeartbeat = 0;
-static uint32_t cntRx = 0, cntFwd = 0, cntDup = 0, cntDrop = 0;
+static uint32_t cntRx = 0, cntFwd = 0, cntDup = 0, cntDrop = 0, cntHeal = 0;
 static char lastType[10] = "-", lastFrom[8] = "-";
 static int lastRssi = 0;
 static bool screenDirty = true;
@@ -176,22 +176,33 @@ static void remember(const char* id) {
   seenNext = (seenNext + 1) % SEEN_SIZE;
 }
 
+static bool nodeAlive(const char* name);   // beacon heard in the last few seconds (bulk-link section)
+
+// Demo topology: accept only from the configured neighbour -- unless every configured neighbour has gone
+// silent (no beacon for 6 s). Then accept from anyone, so the flood routes around a dead relay by itself.
+static bool acceptLinks(const Link& l, const char* hop) {
+  bool anyAlive = false;
+  for (const char* a : l.acceptFrom) {
+    if (!a) continue;
+    if (strcmp(a, hop) == 0) return true;
+    if (nodeAlive(a)) anyAlive = true;
+  }
+  if (!anyAlive) cntHeal++;
+  return !anyAlive;
+}
+
 static bool acceptFrom(const char* hop, bool downlink) {
   if (!demoTopology) return true;
   if (downlink) {
     for (const Link& l : DOWNLINK) {
       if (strcmp(l.node, NODE_ID) != 0) continue;
-      for (const char* a : l.acceptFrom)
-        if (a && strcmp(a, hop) == 0) return true;
-      return false;
+      return acceptLinks(l, hop);
     }
     return false;  // BASE (or unlisted node) never takes downlink traffic
   }
   for (const Link& l : TOPOLOGY) {
     if (strcmp(l.node, NODE_ID) != 0) continue;
-    for (const char* a : l.acceptFrom)
-      if (a && strcmp(a, hop) == 0) return true;
-    return false;
+    return acceptLinks(l, hop);
   }
   return true;  // node not listed: accept everything
 }
@@ -207,7 +218,7 @@ static void sendRaw(const char* s, int len) {
 // Codes: BASE 0, B1 1, B2 2, Pi 3. A chunk always moves to a lower code: the next lower node if it was
 // heard in the last 6 s, otherwise the lowest node heard (B1 down -> B2 sends straight to BASE).
 // Unicast, so the radio retries lost frames; alerts keep using the flooding mesh (and LoRa) above.
-#include <WiFiUdp.h>
+#include <AsyncUDP.h>
 #include "mbedtls/base64.h"
 #ifndef HAS_LINK_AP
 #define HAS_LINK_AP (__builtin_strcmp(NODE_ID, "B2") == 0)
@@ -216,8 +227,8 @@ static const uint8_t BULK_MAGIC = 0xB7;
 static const char* LINK_SSID = "RESCUE-LINK";      // hidden, WPA2: only the spotter Pi joins it
 static const char* LINK_PASS = "breadcrumb-link";
 static const uint16_t LINK_PORT = 5005;
-static const uint32_t BEACON_MS = 2000, NB_ALIVE_MS = 6000;
-static const int BULK_Q = 48, NB_MAX = 4;
+static const uint32_t BEACON_MS = 2000, NB_ALIVE_MS = 8000;
+static const int BULK_Q = 96, NB_MAX = 4;
 struct Nb { uint8_t mac[6]; volatile uint32_t seen; volatile int rssi; bool peer; };
 static Nb nb[NB_MAX];
 struct Bulk { uint8_t d[MAX_LEN]; uint8_t len; };
@@ -227,9 +238,10 @@ static int boutHead = 0, boutTail = 0;
 static portMUX_TYPE bulkMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool bulkInflight = false;
 static uint32_t bulkSentAt = 0, lastBeacon = 0;
-static uint32_t bulkRx = 0, bulkFwd = 0, bulkDrop = 0, bulkFail = 0;
+static uint32_t bulkRx = 0, bulkFwd = 0, bulkDrop = 0, bulkFail = 0, bulkUdp = 0, bulkNoRoute = 0, bulkBusy = 0;
 static int bulkVia = -1;
-static WiFiUDP linkUdp;
+static AsyncUDP linkUdp;   // packets handled in the network task: a slow loop() (screen redraw) must not
+                           // let lwIP's tiny UDP receive mailbox overflow
 
 static int myCode() {
   if (isCP) return 0;
@@ -261,13 +273,26 @@ static void bulkOnSent(const esp_now_send_info_t* info, esp_now_send_status_t st
   bulkInflight = false;
 }
 
+static int codeOf(const char* name) {
+  if (strcmp(name, "BASE") == 0) return 0;
+  if (strcmp(name, "B1") == 0) return 1;
+  if (strcmp(name, "B2") == 0) return 2;
+  return -1;                                                 // SP1 (LoRa only) etc.: not tracked
+}
+
+static bool nodeAlive(const char* name) {
+  int c = codeOf(name);
+  if (c < 0 || c >= NB_MAX) return true;
+  return nb[c].seen && millis() - nb[c].seen < NB_ALIVE_MS;
+}
+
 static int nextHop() {
   int mine = myCode();
   uint32_t now = millis();
   auto alive = [&](int c) { return nb[c].seen && now - nb[c].seen < NB_ALIVE_MS; };
   if (mine >= 1 && alive(mine - 1)) return mine - 1;       // the chain: next node toward BASE
   for (int c = 0; c < mine && c < NB_MAX; c++) if (alive(c)) return c;   // skip a dead node
-  return -1;
+  return bulkVia;                                            // beacons lost in a busy moment: keep the last hop
 }
 
 static void bulkQueueOut(const uint8_t* d, int len) {
@@ -314,15 +339,13 @@ static void bulkLoop() {
       peer.ifidx = WIFI_IF_STA;
       peer.encrypt = false;
       nb[c].peer = esp_now_add_peer(&peer) == ESP_OK || esp_now_is_peer_exist(nb[c].mac);
-    }
-  }
-  if (HAS_LINK_AP) {                                         // chunks from the Pi over Wi-Fi
-    for (int i = 0; i < 8; i++) {
-      int n = linkUdp.parsePacket();
-      if (n <= 0) break;
-      uint8_t buf[MAX_LEN];
-      int len = linkUdp.read(buf, sizeof(buf));
-      if (len >= 10 && buf[0] == BULK_MAGIC && buf[1] == 1) { buf[2] = 3; bulkHandle(buf, len); }
+      if (nb[c].peer) {                                      // bulk unicast at 12 Mbps OFDM instead of 1 Mbps;
+        esp_now_rate_config_t rc = {};                       // broadcasts (alerts, beacons) stay at 1 Mbps
+        rc.phymode = WIFI_PHY_MODE_11G;
+        rc.rate = WIFI_PHY_RATE_12M;
+        esp_err_t e = esp_now_set_peer_rate_config(nb[c].mac, &rc);
+        Serial.printf("# peer %d rate 12M %s\n", c, e == ESP_OK ? "ok" : esp_err_to_name(e));
+      }
     }
   }
   while (true) {                                             // chunks from the mesh
@@ -338,7 +361,7 @@ static void bulkLoop() {
     int nh = nextHop();
     if (nh < 0 || !nb[nh].peer) {                            // nobody to send to: drop stale chunks
       boutTail = (boutTail + 1) % BULK_Q;
-      bulkDrop++;
+      bulkNoRoute++;
       return;
     }
     bulkVia = nh;
@@ -348,7 +371,16 @@ static void bulkLoop() {
       bulkSentAt = now;
       boutTail = (boutTail + 1) % BULK_Q;
       bulkFwd++;
-    }
+    } else bulkBusy++;
+  }
+  static uint32_t lastStat = 0;                              // '#' line: ignored by the dashboard
+  if (now - lastStat >= 5000 && (bulkRx || bulkFwd || cntHeal)) {
+    lastStat = now;
+    int q = (boutHead - boutTail + BULK_Q) % BULK_Q;
+    Serial.printf("# bulk udp %lu rx %lu fwd %lu fail %lu drop %lu noroute %lu busy %lu q %d via %d heal %lu\n",
+                  (unsigned long)bulkUdp, (unsigned long)bulkRx, (unsigned long)bulkFwd, (unsigned long)bulkFail,
+                  (unsigned long)bulkDrop, (unsigned long)bulkNoRoute, (unsigned long)bulkBusy, q, bulkVia,
+                  (unsigned long)cntHeal);
   }
 }
 
@@ -665,7 +697,22 @@ void setup() {
 
   if (HAS_PORTAL) portalBegin();
   if (HAS_LINK_AP) {
-    linkUdp.begin(LINK_PORT);
+    linkUdp.listen(LINK_PORT);
+    linkUdp.onPacket([](AsyncUDPPacket& pkt) {             // chunk from the Pi: same queue as ESP-NOW
+      int len = pkt.length();
+      const uint8_t* d = pkt.data();
+      if (len < 10 || len > MAX_LEN || d[0] != BULK_MAGIC || d[1] != 1) return;
+      bulkUdp++;
+      portENTER_CRITICAL(&bulkMux);
+      int next = (binHead + 1) % BULK_Q;
+      if (next != binTail) {
+        memcpy(bulkIn[binHead].d, d, len);
+        bulkIn[binHead].d[2] = 3;                            // came from the Pi
+        bulkIn[binHead].len = len;
+        binHead = next;
+      } else bulkDrop++;
+      portEXIT_CRITICAL(&bulkMux);
+    });
     Serial.printf("# link AP %s on %s udp %u\n", LINK_SSID, WiFi.softAPIP().toString().c_str(), LINK_PORT);
   }
 

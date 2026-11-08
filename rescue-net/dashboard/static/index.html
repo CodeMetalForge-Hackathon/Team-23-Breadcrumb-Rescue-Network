@@ -558,7 +558,7 @@ async function refreshRemote() {
   $("rstats").textContent = `Bulk link ${r.kbps} kbps · ${ok} objects received, ${lost} incomplete`;
 }
 refreshRemote();
-setInterval(refreshRemote, 1000);
+setInterval(refreshRemote, 300);
 </script>
 </body>
 </html>

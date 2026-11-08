@@ -34,6 +34,7 @@ LABELS_FILE = os.path.join(HERE, "board_hub_labels.json")
 LOG_DIR = os.path.join(HERE, "board_hub_logs")
 APP_DIR = os.path.join(HERE, "apps", "rescue-net")      # command-post dashboard run by /admin/proc
 DASH = {"proc": None}
+DASH_ARGS = os.path.join(HERE, "apps", "dashboard.args")
 
 
 def norm_key(s):
@@ -546,10 +547,9 @@ def make_handler(hub, token):
                     DASH["proc"].kill()
             if do == "start":
                 args = [a for a in data.decode().splitlines() if a.strip()]
-                out = open(os.path.join(HERE, "apps", "dashboard.out"), "w", encoding="utf-8")
-                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                DASH["proc"] = subprocess.Popen([sys.executable, "-u", "-m", "dashboard.app", *args], cwd=APP_DIR,
-                                                stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
+                with open(DASH_ARGS, "w", encoding="utf-8") as f:     # remembered: the hub restarts it on boot
+                    f.write("\n".join(args))
+                start_dashboard(args)
                 time.sleep(3)
             p = DASH["proc"]
             tail = ""
@@ -610,6 +610,46 @@ def make_handler(hub, token):
     return H
 
 
+def free_port(port):
+    """Kill whatever listens on 127.0.0.1:port (an orphaned dashboard from a previous hub run). Windows only."""
+    import socket
+    with socket.socket() as so:
+        so.settimeout(0.5)
+        if so.connect_ex(("127.0.0.1", port)) != 0:
+            return
+    if os.name != "nt":
+        return
+    out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 5 and f[1].endswith(f":{port}") and f[3] == "LISTENING" and f[4].isdigit():
+            subprocess.run(["taskkill", "/PID", f[4], "/F"], capture_output=True)
+            print(f"killed old dashboard pid {f[4]} on port {port}", flush=True)
+    time.sleep(1)
+
+
+def start_dashboard(args):
+    port = int(args[args.index("--http-port") + 1]) if "--http-port" in args else 5050
+    free_port(port)
+    out = open(os.path.join(HERE, "apps", "dashboard.out"), "w", encoding="utf-8")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    DASH["proc"] = subprocess.Popen([sys.executable, "-u", "-m", "dashboard.app", *args], cwd=APP_DIR,
+                                    stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
+
+
+def autostart_dashboard():
+    """If a dashboard was started through /admin/proc before, start it again (hub restart, laptop reboot)."""
+    if not os.path.exists(DASH_ARGS):
+        return
+    time.sleep(3)                       # let the hub open BASE first
+    try:
+        args = [a for a in open(DASH_ARGS, encoding="utf-8").read().splitlines() if a.strip()]
+        start_dashboard(args)
+        print("dashboard auto-started", flush=True)
+    except Exception as e:
+        print(f"dashboard autostart failed: {e}", flush=True)
+
+
 def find_esptool():
     pats = [os.path.expandvars(r"%LOCALAPPDATA%\Arduino15\packages\esp32\tools\esptool_py\*\esptool.exe"),
             os.path.expanduser("~/.arduino15/packages/esp32/tools/esptool_py/*/esptool")]
@@ -632,6 +672,7 @@ def main():
         sys.stdout = sys.stderr = f
     hub = Hub(a.esptool or find_esptool())
     threading.Thread(target=hub.scan_forever, daemon=True).start()
+    threading.Thread(target=autostart_dashboard, daemon=True).start()
     print(f"board hub on {a.bind}:{a.port}, esptool={hub.esptool_cmd}", flush=True)
     ThreadingHTTPServer((a.bind, a.port), make_handler(hub, a.token)).serve_forever()
 
