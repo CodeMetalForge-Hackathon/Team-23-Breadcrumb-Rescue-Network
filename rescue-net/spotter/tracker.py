@@ -5,6 +5,10 @@ Each frame: the Pi camera's people and the thermal camera's people (spotter.loca
 A track is confirmed after 3 hits, and dropped after max_age_s without one. Posture is "U", "D" or None
 (can't tell): D needs 5 of the last 7 frames to say D ("?" frames never count towards it) and holds while 3 do;
 U needs 4 of 7.
+A thermal-only track inside the RGB camera's view while the RGB camera does see people is a ghost: the thermal
+camera picks up reflections (glossy whiteboards and windows mirror long-wave IR) that the RGB camera cannot see.
+Ghosts send no alerts and are left out of persons() until the RGB camera sees them too; in the dark (the RGB
+camera sees nobody) thermal-only tracks count as usual.
 """
 from collections import deque
 
@@ -40,6 +44,7 @@ class Track:
         self.ps = None
         self.hits, self.last_seen = 0, now
         self.last_alert, self.alerted_ps = None, None
+        self.ghost = False
         self._take(obs, now)
 
     def _take(self, obs, now):
@@ -76,8 +81,9 @@ class Track:
 
 
 class Tracker:
-    def __init__(self, gate_deg=12.0, gate_m=1.0, max_age_s=1.5, merge_deg=15.0):
+    def __init__(self, gate_deg=12.0, gate_m=1.0, max_age_s=1.5, merge_deg=15.0, cam_fov=None):
         self.gate_deg, self.gate_m, self.max_age_s, self.merge_deg = gate_deg, gate_m, max_age_s, merge_deg
+        self.cam_fov = cam_fov             # RGB camera (yaw, half width) in degrees, for thermal ghosts
         self.tracks = []
         self._next = 1
 
@@ -109,6 +115,10 @@ class Tracker:
             if oi not in used_o:
                 self.tracks.append(Track(self._new_id(), o, now))
         self.tracks = [t for t in self.tracks if now - t.last_seen <= self.max_age_s]
+        for t in self.tracks:
+            if t.last_seen == now:
+                t.ghost = bool(cam_obs and self.cam_fov and t.src(now) == "T"
+                               and abs(angdiff(t.b, self.cam_fov[0])) <= self.cam_fov[1])
         return self.tracks
 
     def due(self, now, cooldown_s):
@@ -116,7 +126,7 @@ class Tracker:
         or cooldown_s since the last alert."""
         out = []
         for t in self.tracks:
-            if not t.confirmed or t.last_seen != now:
+            if not t.confirmed or t.last_seen != now or t.ghost:
                 continue
             if t.last_alert is None or (t.ps == "D" and t.alerted_ps != "D") or now - t.last_alert >= cooldown_s:
                 t.last_alert, t.alerted_ps = now, t.ps
@@ -126,7 +136,7 @@ class Tracker:
     def persons(self, now, limit=5, kp_max=3):
         """Confirmed tracks as compact dicts (meta / bulk kind 4): people down first, then nearest.
         The first kp_max also carry "kp" (keypoints_pct), so meta stays under ~900 B."""
-        live = [t for t in self.tracks if t.confirmed]
+        live = [t for t in self.tracks if t.confirmed and not t.ghost]
         live.sort(key=lambda t: (t.ps != "D", t.r if t.r is not None else 99.0))
         out = []
         for i, t in enumerate(live[:limit]):

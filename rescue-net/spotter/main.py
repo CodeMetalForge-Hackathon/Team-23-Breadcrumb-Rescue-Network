@@ -144,6 +144,7 @@ def main():
                       for d in (th_dets or ())]
             recorder.step(cfg.data, cam_obs, th_obs, scan, imu_now)
             tracker.merge_deg = cfg["track_merge_deg"]
+            tracker.cam_fov = (cfg["cam_yaw"], cfg["cam_hfov"] / 2 - 3)
             tracker.update(cam_obs, th_obs, now)
             shared["persons"] = tracker.persons(now)
             if view:
@@ -151,7 +152,8 @@ def main():
                                + ("" if t.r is None else f" {t.r:.1f}m{t.rs}")
                                for t in tracker.tracks if t.last_seen == now}
             for t in tracker.due(now, cfg["cooldown_s"]):
-                outbox.append(person_alert(t, people.get(id(t.det)), cfg, now))
+                msg = person_alert(t, people.get(id(t.det)), cfg, now)
+                (outbox.appendleft if t.ps == "D" else outbox.append)(msg)    # someone down goes out first
                 log.info("ALERT PERSON #%d b=%.0f r=%s src=%s ps=%s c=%d", t.id, t.b,
                          "-" if t.r is None else f"{t.r:.1f}m({t.rs})", t.src(now) or "-", t.ps or "-", t.c)
 
@@ -171,8 +173,10 @@ def main():
             if last_hb is None or now - last_hb >= cfg["hb_interval_s"]:
                 outbox.append(make_msg("HB", cfg["src"], cfg["ttl"], z=cfg["zone"]))
                 last_hb = now
-            while len(outbox) > 20:
-                log.warning("outbox full, dropped %s", outbox.popleft())
+            while len(outbox) > 20:                # drop the oldest, but never a "person down" alert
+                i = next((k for k, m in enumerate(outbox) if m.get("ps") != "D"), 0)
+                log.warning("outbox full, dropped %s", outbox[i])
+                del outbox[i]
             if outbox and limiter.ready(now):
                 try:
                     sink.send(outbox.popleft())

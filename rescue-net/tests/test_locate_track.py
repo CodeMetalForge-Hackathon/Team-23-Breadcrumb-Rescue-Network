@@ -309,3 +309,17 @@ def test_foreshortened_torso_is_down():
     assert classify(feet_on, c, scale_m=2.0)[0] == "U"           # same picture 4 m away: a real 0.4 m torso
     assert classify(feet_on, c)[0] == "U"                        # range unknown: no claim
     assert classify(feet_on, c, scale_m=0.54, extent_m=1.0)[0] == "?"   # 1 m visible height: not lying
+
+
+def test_thermal_ghost_suppressed_while_camera_sees_people():
+    tr = Tracker(cam_fov=(0.0, 21.0))
+    for i in range(5):
+        tr.update([ob(8, src="C")], [ob(346, src="T")], i * 0.1)   # person at 8 deg, reflection at 346 deg
+    ghost = [t for t in tr.tracks if t.src(0.4) == "T"][0]
+    assert ghost.ghost and ghost.confirmed
+    assert [p["b"] for p in tr.persons(0.4)] == [8]
+    assert ghost not in tr.due(0.5, 0)
+    tr2 = Tracker(cam_fov=(0.0, 21.0))                              # dark room: only the thermal camera sees
+    for i in range(5):
+        tr2.update([], [ob(346, src="T")], i * 0.1)
+    assert not tr2.tracks[0].ghost and len(tr2.persons(0.4)) == 1
