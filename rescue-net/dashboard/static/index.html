@@ -326,6 +326,12 @@ function describe(a) {
       };
     case "HAZARD":
       return { main: a.msg || "Hazard reported", details: extras(a) };
+    case "MARK":
+      return {
+        main: `${a.z || a.src} position marked`,
+        details: [a.slam ? `x ${a.mx} m, y ${a.my} m on the floor plan` : "no SLAM map yet: placed at the start point",
+                  "button on the node, spotter held next to it"],
+      };
     default:
       return { main: `${a.t || "Unknown"} message${a.msg ? `: ${a.msg}` : ""}`, details: extras(a) };
   }

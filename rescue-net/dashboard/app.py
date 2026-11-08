@@ -96,7 +96,7 @@ class State:
                                   "reps": reps, "first": first})
                         return True
             self.seq += 1
-            self.alerts.append({**msg, "key": str(self.seq), "rx": now, "handled": False})
+            self.alerts.append({**msg, "key": str(self.seq), "rx": now, "handled": t == "MARK"})  # MARK: info only
             del self.alerts[:-MAX_ALERTS]
             return True
 
@@ -156,9 +156,14 @@ def handle_line(state, raw, record=True):
     now = time.time()
     if record:
         jsonlog.append("messages", {"rx": round(now, 3), "msg": msg})
+    if msg.get("t") == "MARK":         # node button D2: the spotter is standing next to this node right now
+        x, y, _ = state.map.pose
+        msg = {**msg, "mx": round(x, 2), "my": round(y, 2), "slam": state.map.slam is not None}
     new = state.ingest(msg, now)
     if new and msg.get("t") == "PERSON":
         state.map.add_alert(msg, now)
+    elif new and msg.get("t") == "MARK":
+        state.map.set_node(msg.get("z") or msg.get("src"), msg["mx"], msg["my"])
     log.info("%s %s", "RX " if new else "DUP", json.dumps(msg, separators=(",", ":")))
 
 

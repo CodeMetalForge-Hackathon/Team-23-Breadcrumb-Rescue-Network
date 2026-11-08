@@ -17,6 +17,8 @@
 //
 // Buttons: D0 (active low) sends a TEST PERSON alert from this node.
 //          D1 toggles demo topology (only accept messages from the configured neighbour).
+//          D2 sends MARK {"t":"MARK","z":<this node>}: the operator holds the spotter next to this node and
+//          presses it; the dashboard registers the node at the spotter's current SLAM pose.
 
 #include <WiFi.h>
 #include <esp_now.h>
@@ -650,6 +652,7 @@ void setup() {
 
   pinMode(0, INPUT_PULLUP);    // D0: active low
   pinMode(1, INPUT_PULLDOWN);  // D1: active high
+  pinMode(2, INPUT_PULLDOWN);  // D2: active high (MARK)
 
   if (HAS_PORTAL) {
     WiFi.mode(WIFI_AP_STA);
@@ -847,6 +850,15 @@ void loop() {
     } else if (digitalRead(1) == HIGH) {
       lastPress = now;
       demoTopology = !demoTopology;
+      screenDirty = true;
+    } else if (digitalRead(2) == HIGH) {
+      lastPress = now;
+      JsonDocument m;
+      m["t"] = "MARK";
+      m["z"] = NODE_ID;
+      originate(m, true);          // sent twice (same id): a lost frame gets a second chance
+      strncpy(lastType, "MARKED", sizeof(lastType) - 1);
+      strncpy(lastFrom, "me", sizeof(lastFrom) - 1);
       screenDirty = true;
     }
   }

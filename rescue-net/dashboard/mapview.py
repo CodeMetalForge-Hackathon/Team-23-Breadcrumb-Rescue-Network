@@ -87,10 +87,8 @@ class MapState:
                 self.cloud = Cloud()
             except Exception:
                 log.exception("Cloud()")
-        try:
-            self.nodes = json.loads(self.nodes_file.read_text())
-        except (OSError, ValueError):
-            pass
+        # node positions are not reloaded: a new run starts a new SLAM origin, so old positions would be wrong.
+        # The file is only a record of the last placements.
 
     def _new_slam(self):
         if Slam2D is None:
@@ -202,6 +200,7 @@ class MapState:
         with self.lock:
             self._new_slam()
             self.pose, self.path, self.scan, self.persons, self.relays = (0.0, 0.0, 0.0), [], [], {}, []
+            self.nodes = {}                  # new origin: press D2 on each node again (BASE first, at the start)
             self.png, self.png_info = None, None
 
     # ---- outputs ----
