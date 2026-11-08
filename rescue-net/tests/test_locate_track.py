@@ -132,7 +132,29 @@ def test_meta_persons_compact():
     p = tr.persons(0.3)
     assert len(p) == 5 and p[0]["src"] == "CT"
     blob = json.dumps({"t": 1762590000.1, "acc": [1.5, 1.3, 21.3], "tilt": 5.3, "persons": p}, separators=(",", ":"))
-    assert len(blob) < 600
+    assert len(blob) < 600                                # no keypoints on these fake detections
+
+
+def test_meta_keypoints_percent_of_box_and_size():
+    from spotter.tracker import keypoints_pct
+    d = det(0.2, 0.1, 0.4, 0.9)
+    d.kpts[0] = (0.3, 0.5, 0.9)                           # nose in the middle of the box
+    d.kpts[5] = (0.2, 0.1, 1.0)                           # top-left corner
+    d.kpts[6] = (0.4, 0.9, 1.0)                           # bottom-right corner: clamped to 99
+    kp = keypoints_pct(d)
+    assert len(kp) == 34 and kp[0:2] == [50, 50] and kp[10:12] == [0, 0] and kp[12:14] == [99, 99]
+    assert kp[2:4] == [-1, -1]                            # not visible
+    tr = Tracker()
+    for i in range(4):
+        tr.update([Obs("C", b, 1 + b / 40, "L", "U", 88, det(0.2, 0.1, 0.4, 0.9), 0.3)
+                   for b in (0, 40, 80, 120, 160, 200)], [], i * 0.1)
+    for t in tr.tracks:                                   # worst case: every keypoint visible, two digits
+        t.det.kpts[:] = (0.31, 0.52, 1.0)
+    p = tr.persons(0.3)
+    assert sum("kp" in x for x in p) == 3
+    blob = json.dumps({"t": 1762590000.1, "acc": [1.5, 1.3, 21.3], "tilt": 5.3, "persons": p,
+                       "lvl": 2, "rssi": -80}, separators=(",", ":"))
+    assert len(blob) < 900
 
 
 def test_person_alert_fits_lora():

@@ -122,9 +122,32 @@ class Tracker:
                 out.append(t)
         return out
 
-    def persons(self, now, limit=5):
-        """Confirmed tracks as compact dicts (meta / bulk kind 4): people down first, then nearest."""
+    def persons(self, now, limit=5, kp_max=3):
+        """Confirmed tracks as compact dicts (meta / bulk kind 4): people down first, then nearest.
+        The first kp_max also carry "kp" (keypoints_pct), so meta stays under ~900 B."""
         live = [t for t in self.tracks if t.confirmed]
         live.sort(key=lambda t: (t.ps != "D", t.r if t.r is not None else 99.0))
-        return [{"id": t.id, "b": round(t.b), "r": None if t.r is None else round(t.r, 1), "rs": t.rs,
-                 "src": t.src(now) or "-", "ps": t.ps or "-", "c": t.c} for t in live[:limit]]
+        out = []
+        for i, t in enumerate(live[:limit]):
+            p = {"id": t.id, "b": round(t.b), "r": None if t.r is None else round(t.r, 1), "rs": t.rs,
+                 "src": t.src(now) or "-", "ps": t.ps or "-", "c": t.c}
+            kp = keypoints_pct(t.det) if i < kp_max else None
+            if kp is not None:
+                p["kp"] = kp
+            out.append(p)
+        return out
+
+
+def keypoints_pct(det, min_conf=0.5):
+    """17 COCO keypoints -> 34 ints: x, y as percent 0..99 of the person's box, -1 where not visible."""
+    kpts = getattr(det, "kpts", None)
+    if kpts is None:
+        return None
+    w, h = max(det.x1 - det.x0, 1e-6), max(det.y1 - det.y0, 1e-6)
+    out = []
+    for x, y, conf in kpts:
+        if conf < min_conf:
+            out += [-1, -1]
+        else:
+            out += [min(max(int((x - det.x0) / w * 100), 0), 99), min(max(int((y - det.y0) / h * 100), 0), 99)]
+    return out
