@@ -37,6 +37,7 @@ A responder carries a handheld **spotter**: a Raspberry Pi 5 with an AI accelera
 - **Hardware.** The AI HAT's stacking header had been mounted upside down, which cut off every GPIO pin until we found it. A speaker we added was too noisy to use, so we shelved it.
 - **A handheld, tilted LiDAR is a hard SLAM input.** It sat 6° off level (we re-mounted it to about 3°), and people walk unevenly. We gate scans on the accelerometer and reject bad matches rather than corrupt the map.
 - **Monocular depth did not beat simple geometry.** We tried Depth Anything V2 Small, scaled by the LiDAR, to range people. On 25 live observations it read a median 50% too far (median error 1.0 m), while range from the person's box size had a median error of 0.25 m, so we dropped it.
+- **Nodding the rig for height distorted the 3D view.** Tilting the handheld LiDAR up and down while the map was paused was meant to add height to the 3D view, but it distorted the point cloud too much, so we dropped it. Only a guard that discards scans tilted past 30° remains.
 - **Bandwidth.** Pictures, LiDAR and the map had to share one relay chain, so we prioritized the map and the people and let the images degrade.
 
 ## Accomplishments we're proud of

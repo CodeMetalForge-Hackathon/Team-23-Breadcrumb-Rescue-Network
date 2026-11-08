@@ -22,7 +22,7 @@ A responder walks into a building that has no GPS, cell service or Wi-Fi. They c
 ## Mentor feedback we designed for
 
 1. **Low light.** Pose detection also runs on the thermal camera. A thermal-only detection still raises a PERSON alert, marked `s:"T"`.
-2. **Environment modelling.** The handheld 2D SLAM builds a floor plan on the dashboard, drawn as clean wall segments. A 3D point cloud view adds height: pause the map, then nod the rig.
+2. **Environment modelling.** The handheld 2D SLAM builds a floor plan on the dashboard, drawn as clean wall segments. A 3D point cloud view is also available, with floor and ceiling returns hidden by default. (We tried nodding the rig to add height and dropped it: it distorts the cloud too much.)
 3. **Node-failure resilience.** Alerts flood through every relay with de-duplication and a hop limit, so they route around a relay that goes silent. The spotter's LoRa bridge (SP1) reboots itself when its USB link stalls, and a hardware watchdog backs that up. The laptop hub reopens a serial port that goes silent.
 4. **Best relay placement.** The planner estimates link margin from the walked path, the distance and the walls on the map. It suggests where the next relay should go, labelled "place relay N" on the map. Operators register a real relay by pressing its D2 button while standing next to it, or by dragging it on the map.
 
@@ -52,7 +52,7 @@ A responder walks into a building that has no GPS, cell service or Wi-Fi. They c
 | Room-style plan: wall segments extracted from the SLAM grid (denoised, about 70 ms) | implemented, unit-tested (`tests/test_floorplan.py`) |
 | Suggested relay spots on the floor plan, labelled "place relay N" | implemented; calibrating the radio model from measured RSSI along the walk is in progress |
 | 3D point cloud view, with estimated floor and ceiling returns hidden by default (Floor/ceiling toggle) | implemented, unit-tested (`tests/test_cloud_filter.py`, `tests/test_cloud_filter_replay.py`) |
-| Nodding the rig while the map is paused adds height to the 3D cloud; scans tilted past 30° are dropped | implemented; live test pending |
+| Nodding the rig while the map is paused, to add height to the 3D cloud | dropped 2026-11-08 about 07:00 EST: it distorts the point cloud too much. Only the guard that drops scans tilted past 30° remains |
 
 ## Hardware
 
