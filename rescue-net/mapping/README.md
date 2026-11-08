@@ -70,7 +70,7 @@ handheld walk have not been benchmarked.
 ## Recording and replay
 
 Input is gzip-compressed UTF-8 JSONL. The first line must be `{"meta": {...}}`.
-Each following nonblank line is:
+Following nonblank lines may be scans:
 
 ```json
 {"t": 1720000000.25, "a": [1, 2, 21], "ang": [0, 9000, 18000], "mm": [1200, 2300, 1800]}
@@ -85,8 +85,25 @@ the metadata envelope but uses the SLAM implementation's calibration defaults.
 It does not silently change calibration from arbitrary recording fields.
 Timestamps are passed in file order so SLAM can apply its own timing checks.
 
+Recordings from `tools/tap_walk.py` may also include a finite `rx` receive
+timestamp on each scan and interleave these auxiliary records:
+
+```json
+{"rx": 1720000000.26, "m": {"lvl": 0, "persons": []}}
+{"rx": 1720000000.27, "msg": {"t": "MARK", "id": "relay-1"}}
+```
+
+Replay validates that each auxiliary envelope contains exactly `rx` and one of
+`m` or `msg`, with a finite receive timestamp and an object payload, then counts
+and skips it. Payload contents are not interpreted. MARK, PERSON, and other
+relay-chain messages do not update pose or create map coordinates. Scan order
+and sensor timestamps `t` are retained; `rx` never replaces `t` or changes the
+reported scan duration. Unknown record envelopes, ambiguous mixed scan/event
+rows, malformed scans, and recordings with no scans remain errors.
+
 The CLI prints total/accepted/rejected scans, input-point count, rejection reasons
-when available, recording duration, replay-plus-PNG timing, and final pose. Exit
+when available, counts of skipped spotter-meta and node-message records when
+present, recording duration, replay-plus-PNG timing, and final pose. Exit
 status is `0` when at least one scan is accepted, `1` when none are accepted
 (an image is still written), and `2` for a recording/interface/file error. Scan
 format errors identify the offending line. The output directory must exist;

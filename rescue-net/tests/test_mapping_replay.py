@@ -87,6 +87,77 @@ def test_streaming_replay_units_acceleration_counts_and_valid_png(tmp_path):
     assert np.any(np.all(image == (25, 180, 80), axis=2))
 
 
+def test_mixed_walk2_events_do_not_change_scan_order_pose_or_pixels(tmp_path):
+    scans = [
+        {"t": 10.0, "rx": 999.0, "ang": [0, 9000], "mm": [500, 2000], "a": [1, 2, 21]},
+        {"t": 10.2, "rx": 998.0, "ang": [100, 200], "mm": [300, 400], "a": None},
+        {"t": 10.4, "rx": 1001.0, "ang": [0, 100], "mm": [500, 600], "a": None},
+    ]
+    header = {"meta": {"source": "synthetic tap_walk"}}
+    mixed = [header,
+             {"rx": 0.0, "m": {"lvl": 0, "persons": []}},
+             scans[0],
+             {"rx": 500.0, "msg": {"t": "MARK", "id": "relay-1", "x": 9000, "y": 9000}},
+             {"rx": 500.1, "msg": {"t": "PERSON", "b": 90, "r": 3}},
+             scans[1],
+             {"rx": 20.0, "m": {"rssi": -75}},
+             scans[2],
+             {"rx": 99999.0, "msg": {"t": "CUSTOM", "extra": "opaque payload"}}]
+    plain_slam, mixed_slam = FakeSlam(), FakeSlam()
+    plain_png, mixed_png = tmp_path / "plain.png", tmp_path / "mixed.png"
+    plain_stats = replay.replay_file(recording(tmp_path / "plain.gz", [header, *scans]),
+                                     plain_png, slam=plain_slam)
+    stats = replay.replay_file(recording(tmp_path / "mixed.gz", mixed), mixed_png, slam=mixed_slam)
+    assert (stats.meta_events, stats.message_events, stats.skipped_events) == (2, 3, 5)
+    assert plain_stats.skipped_events == 0
+    assert (stats.scans, stats.accepted, stats.rejected) == (3, 2, 1)
+    assert stats.recorded_s == pytest.approx(0.4)
+    assert [call[2] for call in mixed_slam.calls] == [10.0, 10.2, 10.4]
+    assert mixed_slam.pose == plain_slam.pose
+    assert mixed_slam.path == plain_slam.path
+    assert mixed_png.read_bytes() == plain_png.read_bytes()
+    for actual, expected in zip(mixed_slam.calls, plain_slam.calls):
+        np.testing.assert_array_equal(actual[0], expected[0])
+        np.testing.assert_array_equal(actual[1], expected[1])
+        assert actual[2:] == expected[2:]
+
+
+@pytest.mark.parametrize("row,match", [
+    ({"rx": 1, "event": {}}, "unknown recording record"),
+    ({"rx": 1}, "unknown recording record"),
+    ({"meta": {}}, "unknown recording record"),
+    ([], "JSON object"),
+    ({"m": {}}, "exactly rx"),
+    ({"rx": 1, "m": {}, "msg": {}}, "exactly rx"),
+    ({"rx": 1, "m": {}, "extra": 2}, "exactly rx"),
+    ({"rx": 1, "m": {}, "t": 1, "ang": [0], "mm": [10]}, "exactly rx"),
+    ({"rx": 1, "msg": [], }, "payload must be a JSON object"),
+    ({"rx": 1, "m": None}, "payload must be a JSON object"),
+    ({"rx": True, "msg": {}}, "rx must be a finite number"),
+    ({"rx": float("inf"), "m": {}}, "rx must be a finite number"),
+    ({"t": 1, "rx": None, "ang": [0], "mm": [10]}, "rx must be a finite number"),
+    ({"t": 1, "ang": [0], "mm": [10], "event": {}}, "unknown scan field"),
+])
+def test_unknown_or_malformed_event_envelopes_are_not_silently_skipped(tmp_path, row, match):
+    source = recording(tmp_path / "bad.gz", [{"meta": {}}, row])
+    slam = FakeSlam()
+    output = tmp_path / "map.png"
+    with pytest.raises(replay.ReplayError, match=f"line 2.*{match}"):
+        replay.replay_file(source, output, slam=slam)
+    assert slam.calls == []
+    assert not output.exists()
+
+
+def test_metadata_and_auxiliary_events_without_scans_remain_an_error(tmp_path):
+    source = recording(tmp_path / "events.gz", [
+        {"meta": {}}, {"rx": 1, "m": {}}, {"rx": 2, "msg": {"t": "MARK"}},
+    ])
+    slam = FakeSlam()
+    with pytest.raises(replay.ReplayError, match="no scans"):
+        replay.replay_file(source, tmp_path / "out.png", slam=slam)
+    assert slam.calls == []
+
+
 @pytest.mark.parametrize("row,match", [
     ({"t": 0, "ang": [0], "mm": []}, "same nonzero length"),
     ({"t": 0, "ang": [0.5], "mm": [10]}, "integers"),
@@ -143,11 +214,14 @@ def test_invalid_recording_preserves_an_existing_output(tmp_path):
 
 def test_cli_reports_acceptance_and_pose(tmp_path, monkeypatch, capsys):
     stats = replay.ReplayStats(3, 2, 700, 0.5, 1.0, (1.0, 2.0, 0.0), {"tilt": 1}, tmp_path / "out.png")
+    assert stats.skipped_events == 0  # Existing positional construction is compatible.
+    stats.meta_events, stats.message_events = 2, 3
     monkeypatch.setattr(replay, "replay_file", lambda *args: stats)
     assert replay.main(["walk.gz", str(stats.output)]) == 0
     output = capsys.readouterr().out
     assert "accepted: 2; rejected: 1" in output
     assert "x=1.000 m, y=2.000 m" in output
+    assert "Skipped auxiliary records: 5 (spotter meta: 2; node messages: 3)" in output
     stats.accepted = 0
     assert replay.main(["walk.gz", str(stats.output)]) == 1
     assert "No scans were accepted" in capsys.readouterr().err

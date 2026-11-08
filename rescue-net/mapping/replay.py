@@ -30,10 +30,17 @@ class ReplayStats:
     pose: tuple
     rejection_reasons: dict
     output: Path
+    meta_events: int = 0
+    message_events: int = 0
 
     @property
     def rejected(self):
         return self.scans - self.accepted
+
+
+    @property
+    def skipped_events(self):
+        return self.meta_events + self.message_events
 
 
 def _finite(value, label):
@@ -46,6 +53,30 @@ def _finite(value, label):
     if not math.isfinite(result):
         raise ReplayError(f"{label} must be a finite number")
     return result
+
+
+def _record_kind(record, line_number):
+    """Validate known envelopes without interpreting auxiliary payloads."""
+    label = f"line {line_number}"
+    if not isinstance(record, dict):
+        raise ReplayError(f"{label}: record must be a JSON object")
+    event_keys = {"m", "msg"}.intersection(record)
+    if event_keys:
+        if len(event_keys) != 1 or set(record) != {"rx", *event_keys}:
+            raise ReplayError(f"{label}: auxiliary event must contain exactly rx and one of m/msg")
+        kind = next(iter(event_keys))
+        _finite(record["rx"], f"{label}: rx")
+        if not isinstance(record[kind], dict):
+            raise ReplayError(f"{label}: {kind} event payload must be a JSON object")
+        return kind
+    if {"t", "a", "ang", "mm"}.intersection(record):
+        extra = set(record) - {"t", "a", "ang", "mm", "rx"}
+        if extra:
+            raise ReplayError(f"{label}: unknown scan field(s): {', '.join(sorted(extra))}")
+        if "rx" in record:
+            _finite(record["rx"], f"{label}: rx")
+        return "scan"
+    raise ReplayError(f"{label}: unknown recording record; expected a scan or rx+m/rx+msg event")
 
 
 def _scan(record, line_number):
@@ -199,7 +230,7 @@ def replay_file(input_path, output_path, *, slam=None):
         from .slam import Slam2D
         slam = Slam2D()
     started = time.perf_counter()
-    scans = accepted = points = 0
+    scans = accepted = points = meta_events = message_events = 0
     first_t = last_t = None
     reasons = Counter()
     try:
@@ -213,7 +244,15 @@ def replay_file(input_path, output_path, *, slam=None):
             for line_number, line in enumerate(stream, 2):
                 if not line.strip():
                     continue
-                angles, distances, timestamp, acceleration = _scan(_read_json(line, line_number), line_number)
+                record = _read_json(line, line_number)
+                kind = _record_kind(record, line_number)
+                if kind == "m":
+                    meta_events += 1
+                    continue
+                if kind == "msg":
+                    message_events += 1
+                    continue
+                angles, distances, timestamp, acceleration = _scan(record, line_number)
                 result = slam.update(angles, distances, timestamp, acc=acceleration)
                 if not isinstance(result, dict) or not isinstance(result.get("ok"), (bool, np.bool_)):
                     raise ReplayError("Slam2D.update must return a dict containing boolean ok")
@@ -237,7 +276,8 @@ def replay_file(input_path, output_path, *, slam=None):
         raise ReplayError(f"invalid Slam2D map/pose interface: {exc}") from None
     write_png(output_path, image)
     return ReplayStats(scans, accepted, points, time.perf_counter() - started,
-                       max(0.0, last_t - first_t), pose, dict(reasons), output_path)
+                       max(0.0, last_t - first_t), pose, dict(reasons), output_path,
+                       meta_events=meta_events, message_events=message_events)
 
 
 def main(argv=None):
@@ -253,6 +293,9 @@ def main(argv=None):
     x, y, heading = stats.pose
     print(f"Scans: {stats.scans}; accepted: {stats.accepted}; rejected: {stats.rejected}; "
           f"input points: {stats.points}")
+    if stats.skipped_events:
+        print(f"Skipped auxiliary records: {stats.skipped_events} "
+              f"(spotter meta: {stats.meta_events}; node messages: {stats.message_events})")
     print(f"Recording: {stats.recorded_s:.2f} s; replay + PNG: {stats.elapsed_s:.3f} s; "
           f"{stats.scans / max(stats.elapsed_s, 1e-9):.1f} scans/s")
     print(f"Final pose: x={x:.3f} m, y={y:.3f} m, "
