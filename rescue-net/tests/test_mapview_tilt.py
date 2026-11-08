@@ -56,3 +56,19 @@ def test_two_people_far_apart_in_bearing_stay_two(tmp_path):
     ms.add_meta(_meta(25.0, 2.0, pid=1, b=0), now=100.0)
     ms.add_meta(_meta(25.0, 2.0, pid=2, b=90), now=100.5)
     assert sorted(ms.persons) == ["1", "2"]
+
+
+def test_fast_reid_level_rig_is_one_dot(tmp_path):
+    # live 2026-11-08 07:32: track 86 ended and 89 started within a second at the same spot: two dots
+    ms = _ms(tmp_path)
+    ms.add_meta(_meta(3.0, 2.0, pid=86, b=340), now=100.0)
+    ms.add_meta(_meta(3.0, 2.1, pid=89, b=338), now=100.3)
+    assert list(ms.persons) == ["89"]
+
+
+def test_two_live_tracks_close_together_stay_two(tmp_path):
+    ms = _ms(tmp_path)
+    both = {"tilt": 3.0, "persons": [{"id": 1, "b": 0, "r": 2.0, "rs": "L"}, {"id": 2, "b": 8, "r": 2.2, "rs": "L"}]}
+    ms.add_meta(both, now=100.0)
+    ms.add_meta(both, now=100.3)
+    assert sorted(ms.persons) == ["1", "2"]

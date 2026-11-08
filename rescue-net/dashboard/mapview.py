@@ -196,9 +196,10 @@ class MapState:
         # then keeps the person on the map with their last level range (see there).
         tilt = m.get("tilt")
         self.tilted = self.reject_reason == "tilted" or (tilt is not None and tilt > PERSON_TILT_MAX)
+        live = {str(p.get("id")) for p in m.get("persons") or []}   # tracks the Pi still reports
         for p in m.get("persons") or []:
             self.add_person(p.get("id"), p.get("b"), p.get("r"), ps=p.get("ps"), src=p.get("src"),
-                            c=p.get("c"), rs=p.get("rs"), kp=p.get("kp"), via="bulk", now=now)
+                            c=p.get("c"), rs=p.get("rs"), kp=p.get("kp"), via="bulk", now=now, live=live)
 
     def add_alert(self, msg, now=None):
         """PERSON alert over LoRa: k (track id), b (deg), r (decimetres). Placed from the Pi's current pose."""
@@ -209,7 +210,7 @@ class MapState:
                         ps=msg.get("ps"), src=msg.get("s") or ("CT" if msg.get("th") else "C"),
                         c=msg.get("c"), via="lora", now=now)
 
-    def add_person(self, pid, b, r, ps=None, src=None, c=None, rs=None, kp=None, via="bulk", now=None):
+    def add_person(self, pid, b, r, ps=None, src=None, c=None, rs=None, kp=None, via="bulk", now=None, live=None):
         if pid is None or b is None:
             return
         now = time.time() if now is None else now
@@ -222,7 +223,7 @@ class MapState:
             unsure = bool(self.tilted and rs in ("L", None) and r)
             if unsure and pid not in self.persons:
                 near = [(abs(_angdiff(float(b), float(q["b"]))), k) for k, q in self.persons.items()
-                        if q.get("b") is not None and now - q["seen"] <= TILT_SAME_S]
+                        if q.get("b") is not None and now - q["seen"] <= TILT_SAME_S and not (live and k in live)]
                 near = [(d, k) for d, k in near if d <= TILT_SAME_DEG]
                 if near:
                     q = self.persons.pop(min(near)[1])
@@ -232,8 +233,9 @@ class MapState:
                 r, unsure = self.persons[pid]["r_ok"], False
             if pid not in self.persons and r and not unsure:   # tracker gave a new id: take over a nearby idle entry
                 x, y = sensor_to_map(self.pose, float(b), float(r))
+                # idle: no update for MERGE_IDLE, or (bulk meta) the Pi no longer reports that track (fast re-id)
                 near = [(math.hypot(q["x"] - x, q["y"] - y), k) for k, q in self.persons.items()
-                        if q.get("x") is not None and now - q["seen"] >= MERGE_IDLE]
+                        if q.get("x") is not None and (now - q["seen"] >= MERGE_IDLE or (live and k not in live))]
                 olds = [self.persons.pop(k) for d, k in sorted(near) if d <= MERGE_M]   # all idle duplicates there
                 if olds:
                     q = olds[0]
