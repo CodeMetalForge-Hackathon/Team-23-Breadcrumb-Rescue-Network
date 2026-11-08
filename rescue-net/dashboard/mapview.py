@@ -318,6 +318,7 @@ class MapState:
                 del self.persons[pid]
             persons = [{**p, "age": round(now - p["seen"], 1)} for p in self.persons.values()]
             path = self.path if len(self.path) <= 800 else self.path[:: len(self.path) // 800 + 1] + [self.path[-1]]
+            rs = self.rssi_samples if len(self.rssi_samples) <= 800 else self.rssi_samples[:: len(self.rssi_samples) // 800 + 1]
             return {
                 "slam": self.slam is not None, "slam_error": self.slam_error,
                 "pose": [round(v, 3) for v in self.pose], "path": path, "scan": self.scan,
@@ -327,6 +328,7 @@ class MapState:
                 "rejected": getattr(self.slam, "rejected", None),
                 "persons": persons, "nodes": dict(self.nodes), "relays": self.relays, "walls": self.walls,
                 "png": self.png_info, "link": self.link, "paused": self.paused,
+                "rssi": [[x, y, r] for x, y, r, _ in rs], "rssi_node": RSSI_NODE,   # measured signal along the walk
             }
 
     def cloud_snapshot(self):
