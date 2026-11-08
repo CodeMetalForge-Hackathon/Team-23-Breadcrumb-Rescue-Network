@@ -12,6 +12,8 @@ A false "person down / possible casualty" is worse than "?", so D needs positive
     scan plane (chest / waist height on the rig), so the person is not lying flat; a visible vertical extent of
     upright_min_m (0.9 m) or more cannot be a person lying down (a box cut by the image edge still gives a lower
     bound, so this also turns "?" into U).
+Only the torso gives D: level shins or legs alone are someone sitting with their feet up as often as someone
+lying. A box cut by the image edge gives D only with cut_min_torso_kp (3) of the 2 shoulders + 2 hips visible.
 The box shape never gives D: the camera's field of view is narrow, and a box cut by the image edge (or a person
 partly hidden) says nothing about posture. An uncut box clearly taller than wide gives U.
 Coordinates are normalised 0..1; x_scale = image width / height, so x * x_scale is comparable to y.
@@ -76,6 +78,8 @@ def classify(det, cfg, x_scale=16 / 9, roll_deg=0.0, extent_m=None, lidar_body=F
             if ang is not None:
                 ps = "D" if ang >= down_a else "U" if ang <= up_a else "?"
                 why = f"{name} {ang:.0f}deg"
+                if ps == "D" and name != "torso":
+                    ps = "?"                          # legs out level (sitting, feet up) is not a person down
                 break
     if kpts is not None and scale_m and ps != "D":
         p, q = _mid(kpts, L_SH, R_SH), _mid(kpts, L_HIP, R_HIP)
@@ -87,6 +91,9 @@ def classify(det, cfg, x_scale=16 / 9, roll_deg=0.0, extent_m=None, lidar_body=F
         w, h = (det.x1 - det.x0) * x_scale, det.y1 - det.y0
         if h > 0 and w / h <= 0.8:
             ps, why = "U", f"box {w / h:.2f} wide/high"
+    if ps == "D" and cut_by_edge(det) and sum(kpts[i][2] >= KPT_MIN_CONF for i in (L_SH, R_SH, L_HIP, R_HIP)) \
+            < _get(cfg, "cut_min_torso_kp", 3):
+        return "?", why + ", but cut by the image edge without the whole torso"
     tall = extent_m is not None and extent_m >= _get(cfg, "upright_min_m", 0.9)
     # a clearly horizontal body fully in view stands (lies) on its own; the LiDAR / extent checks are for the
     # doubtful cases (cut by the image edge, or an angle near the threshold), so a wall right behind a person

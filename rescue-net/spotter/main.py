@@ -141,13 +141,15 @@ def main():
             people = {id(p.det): p for p in analysis.persons}
             imu_now = imu.latest() if imu else None
             roll = roll_deg(imu_now, cfg["imu_roll_axis"])         # 0 until the sideways axis is known
-            cam_obs = [locate.observe(p.det, "C", scan, cfg.data, roll_deg=roll) for p in analysis.persons
+            tilt = imu_now.tilt if imu_now else None
+            cam_obs = [locate.observe(p.det, "C", scan, cfg.data, roll_deg=roll, tilt_deg=tilt) for p in analysis.persons
                        if p.decision != "rejected"]
-            th_obs = [locate.observe(d, "T", scan, cfg.data, x_scale=th_det.x_scale, roll_deg=roll)
+            th_obs = [locate.observe(d, "T", scan, cfg.data, x_scale=th_det.x_scale, roll_deg=roll, tilt_deg=tilt)
                       for d in (th_dets or ())]
             recorder.step(cfg.data, cam_obs, th_obs, scan, imu_now)
             tracker.merge_deg = cfg["track_merge_deg"]
             tracker.cam_fov = (cfg["cam_yaw"], cfg["cam_hfov"] / 2 - 3)
+            tracker.need_thermal_for_down = th_det is not None and bool(cfg.data.get("down_needs_thermal", True))
             tracker.update(cam_obs, th_obs, now)
             shared["persons"] = tracker.persons(now)
             if view:
@@ -155,10 +157,10 @@ def main():
                                + ("" if t.r is None else f" {t.r:.1f}m{t.rs}")
                                for t in tracker.tracks if t.last_seen == now}
             for t in tracker.due(now, cfg["cooldown_s"]):
-                msg = person_alert(t, people.get(id(t.det)), cfg, now)
-                (outbox.appendleft if t.ps == "D" else outbox.append)(msg)    # someone down goes out first
+                msg = person_alert(t, people.get(id(t.det)), cfg, now, tracker.posture(t, now))
+                (outbox.appendleft if msg.get("ps") == "D" else outbox.append)(msg)    # someone down goes out first
                 log.info("ALERT PERSON #%d b=%.0f r=%s src=%s ps=%s c=%d", t.id, t.b,
-                         "-" if t.r is None else f"{t.r:.1f}m({t.rs})", t.src(now) or "-", t.ps or "-", t.c)
+                         "-" if t.r is None else f"{t.r:.1f}m({t.rs})", t.src(now) or "-", msg.get("ps") or "-", t.c)
 
             best = {}                              # HEAT (MLX90640 only): strongest per view, debounced
             for cand in analysis.candidates:
@@ -200,7 +202,7 @@ def main():
         log.info("spotter stopped")
 
 
-def person_alert(t, person, cfg, now):
+def person_alert(t, person, cfg, now, ps=None):
     """PERSON LoRa alert for one track: b = bearing (deg, LiDAR frame), r = range (dm), k = track id."""
     src = t.src(now)
     dt = None if person is None or person.dt is None else round(person.dt)
@@ -211,7 +213,7 @@ def person_alert(t, person, cfg, now):
     else:
         th = None
     return make_msg("PERSON", cfg["src"], cfg["ttl"], c=t.c, th=th, z=cfg["zone"], v=fusion.view_of(t.u), dt=dt,
-                    ps=t.ps, s="T" if src == "T" else None, b=round(t.b),
+                    ps=ps, s="T" if src == "T" else None, b=round(t.b),
                     r=None if t.r is None else round(t.r * 10), k=t.id)
 
 

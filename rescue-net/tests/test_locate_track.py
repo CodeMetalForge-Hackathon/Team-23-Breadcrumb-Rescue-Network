@@ -323,3 +323,63 @@ def test_thermal_ghost_suppressed_while_camera_sees_people():
     for i in range(5):
         tr2.update([], [ob(346, src="T")], i * 0.1)
     assert not tr2.tracks[0].ghost and len(tr2.persons(0.4)) == 1
+
+
+# --- false-alert gates (2026-11-08): dedupe across track ids, D gates, LiDAR range cross-check ------------------
+
+def test_new_track_same_place_same_posture_sends_no_alert():
+    tr, sent = Tracker(), []
+    for i in range(4):
+        tr.update([ob(20)], [], i * 0.1)
+        sent += tr.due(i * 0.1, cooldown_s=10)
+    first = tr.tracks[0].id
+    for i in range(4):                                  # found again 13 deg away (new id), same posture U
+        tr.update([ob(33)], [], 2.5 + i * 0.1)
+        sent += tr.due(2.5 + i * 0.1, cooldown_s=10)
+    assert [t.id for t in sent] == [first]
+    for i in range(6):                                  # it then goes down: alerts at once
+        tr.update([ob(33, ps="D")], [], 3.0 + i * 0.1)
+        sent += tr.due(3.0 + i * 0.1, cooldown_s=10)
+    assert len(sent) == 2 and sent[1].id != first and sent[1].ps == "D"
+
+
+def test_new_track_elsewhere_still_alerts():
+    tr = Tracker()
+    for i in range(4):
+        tr.update([ob(20), ob(80)], [], i * 0.1)
+        tr.due(i * 0.1, cooldown_s=10)
+    assert len(tr.sent) == 2
+
+
+def test_down_needs_thermal_when_required():
+    tr = Tracker(need_thermal_for_down=True)
+    for i in range(8):
+        tr.update([ob(20, ps="D")], [], i * 0.1)
+    t = tr.tracks[0]
+    assert t.ps == "D" and tr.posture(t, 0.7) is None and tr.persons(0.7)[0]["ps"] == "?"
+    tr.update([ob(20, ps="D")], [ob(21, src="T", ps="?")], 0.8)
+    assert tr.posture(t, 0.8) == "D"
+
+
+def test_no_down_closer_than_a_metre():
+    d = body(0.05, 0.3, 0.95, 0.7, torso_deg=85)
+    far = observe(d, "C", scan_with([(-5, 5, 2.0)]), cfg())
+    near = observe(d, "C", scan_with([(-5, 5, 0.9)]), cfg())
+    assert far.ps == "D" and near.ps == "?" and near.r == pytest.approx(0.9, abs=0.05)
+
+
+def test_level_legs_alone_are_not_down():
+    k = np.zeros((17, 3), np.float32)
+    k[13] = k[14] = (0.40, 0.70, 1)                      # knees and ankles level: feet up on a desk
+    k[15] = k[16] = (0.60, 0.70, 1)
+    d = PoseDetection("person", 0.9, 0.3, 0.4, 0.7, 0.8, k)
+    assert observe(d, "C", scan_with([(-5, 5, 2.0)]), cfg()).ps == "?"
+
+
+def test_tilted_rig_uses_box_size_range():
+    d = det(0.45, 0.2, 0.55, 0.9)                        # upright, whole body in view
+    s = scan_with([(-5, 5, 0.7)])                         # the scan plane hits a desk at 0.7 m
+    assert observe(d, "C", s, cfg(), tilt_deg=3.0).rs == "S"   # 0.7 m < half the size range: not this body
+    level = observe(d, "C", scan_with([(-5, 5, 2.2)]), cfg(), tilt_deg=3.0)
+    tilted = observe(d, "C", scan_with([(-5, 5, 2.2)]), cfg(), tilt_deg=15.0)
+    assert level.rs == "L" and tilted.rs == "S" and tilted.r is not None

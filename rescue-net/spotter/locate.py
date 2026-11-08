@@ -11,7 +11,14 @@ from collections import namedtuple
 
 import numpy as np
 
-from spotter.posture import classify
+from spotter.posture import classify, cut_by_edge
+
+
+def _cfg(cfg, key, default):
+    try:
+        return cfg[key]
+    except KeyError:
+        return default
 
 # src "C" = Pi camera, "T" = USB thermal camera. b in deg, r in m (or None), rs "L" (LiDAR) / "S" (box size),
 # ps "U" / "D" / "?", why = what the posture is based on (debug view).
@@ -59,14 +66,25 @@ def size_range(det, hfov, aspect_hw, ps, height_m=1.7, length_m=1.6):
     return None if ext < 0.02 else size / ext
 
 
-def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0):
-    """One detection -> Obs in the LiDAR frame, with posture "U" / "D" / "?" (see spotter/posture.py)."""
+def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0, tilt_deg=None):
+    """One detection -> Obs in the LiDAR frame, with posture "U" / "D" / "?" (see spotter/posture.py).
+
+    The LiDAR range is not trusted (box-size range instead, rs "S") when the rig is tilted more than
+    lidar_max_tilt_deg (the scan plane then hits the floor or a desk in front of the person), or when the box is
+    whole and the LiDAR says less than half of what its size says (something between the rig and the person).
+    No "D" closer than down_min_m: only part of a body that close is in view."""
     hfov_k, yaw_k, dir_k, aspect_hw = CAMERAS[src]
     hfov, yaw, direction = float(cfg[hfov_k]), float(cfg[yaw_k]), int(cfg[dir_k])
     u = (det.x0 + det.x1) / 2
     b = bearing(u, hfov, yaw, direction)
     r_l = lidar_range(scan, b, cfg["lidar_win_deg"], cfg["lidar_min_m"])
     r_down = size_range(det, hfov, aspect_hw, "D")
+    r_up = size_range(det, hfov, aspect_hw, "U")
+    if r_l is not None and tilt_deg is not None and tilt_deg > _cfg(cfg, "lidar_max_tilt_deg", 10.0):
+        r_l = None                                   # tilted rig: the scan plane is not at body height
+    if r_l is not None and not cut_by_edge(det) and r_up is not None and r_down is not None \
+            and r_l < 0.5 * min(r_up, r_down):
+        r_l = None                                   # LiDAR hits something in front of a whole body
     # the LiDAR return is this body (it crosses the scan plane), not the wall behind someone lying below it
     body = r_l is not None and r_down is not None and r_l <= 1.4 * r_down + 0.3
     scale = 2 * math.tan(math.radians(hfov) / 2) * aspect_hw * r_l if body else None   # metres per image height
@@ -74,10 +92,12 @@ def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0):
     # lidar_body_veto off when the rig sits on the floor: its scan plane then hits people lying down too
     ps, why = classify(det, cfg, x_scale or 1 / aspect_hw, roll_deg, extent, body and cfg["lidar_body_veto"],
                        scale)
-    r_s = r_down if ps == "D" else size_range(det, hfov, aspect_hw, "U")
+    r_s = r_down if ps == "D" else r_up
     # LiDAR far behind what the box size says: it is looking past the person (lying below the scan plane)
     if r_l is not None and (r_s is None or r_l <= 1.8 * r_s + 0.5):
         r, rs = r_l, "L"
     else:
         r, rs = r_s, "S" if r_s is not None else None
+    if ps == "D" and r is not None and r < _cfg(cfg, "down_min_m", 1.0):
+        ps, why = "?", why + f", but only {r:.1f} m away"
     return Obs(src, b, r, rs, ps, round(det.score * 100), det, u, why)

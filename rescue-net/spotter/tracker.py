@@ -81,9 +81,13 @@ class Track:
 
 
 class Tracker:
-    def __init__(self, gate_deg=12.0, gate_m=1.0, max_age_s=1.5, merge_deg=15.0, cam_fov=None):
+    def __init__(self, gate_deg=12.0, gate_m=1.0, max_age_s=1.5, merge_deg=15.0, cam_fov=None,
+                 dedupe_deg=15.0, dedupe_s=60.0, need_thermal_for_down=False, thermal_seen_s=3.0):
         self.gate_deg, self.gate_m, self.max_age_s, self.merge_deg = gate_deg, gate_m, max_age_s, merge_deg
         self.cam_fov = cam_fov             # RGB camera (yaw, half width) in degrees, for thermal ghosts
+        self.dedupe_deg, self.dedupe_s = dedupe_deg, dedupe_s
+        self.need_thermal_for_down, self.thermal_seen_s = need_thermal_for_down, thermal_seen_s
+        self.sent = deque()                # (time, bearing, down?, track id) of the alerts sent
         self.tracks = []
         self._next = 1
 
@@ -121,15 +125,30 @@ class Tracker:
                                and abs(angdiff(t.b, self.cam_fov[0])) <= self.cam_fov[1])
         return self.tracks
 
+    def posture(self, t, now):
+        """Track posture as reported: D only with the thermal camera on the person recently, when required."""
+        if t.ps == "D" and self.need_thermal_for_down and now - t.seen.get("T", -1e9) > self.thermal_seen_s:
+            return None
+        return t.ps
+
     def due(self, now, cooldown_s):
         """Confirmed tracks seen this frame that should send an alert now: first sighting, just went down,
-        or cooldown_s since the last alert."""
+        or cooldown_s since the last alert. A new track (the tracker lost someone and found them again) at
+        the bearing of an alert sent in the last dedupe_s, with the same posture, sends nothing."""
+        while self.sent and now - self.sent[0][0] > self.dedupe_s:
+            self.sent.popleft()
         out = []
         for t in self.tracks:
             if not t.confirmed or t.last_seen != now or t.ghost:
                 continue
-            if t.last_alert is None or (t.ps == "D" and t.alerted_ps != "D") or now - t.last_alert >= cooldown_s:
-                t.last_alert, t.alerted_ps = now, t.ps
+            ps = self.posture(t, now)
+            if t.last_alert is None or (ps == "D" and t.alerted_ps != "D") or now - t.last_alert >= cooldown_s:
+                new = t.last_alert is None
+                t.last_alert, t.alerted_ps = now, ps
+                if new and any(tid != t.id and down == (ps == "D") and abs(angdiff(b, t.b)) <= self.dedupe_deg
+                               for _, b, down, tid in self.sent):
+                    continue
+                self.sent.append((now, t.b, ps == "D", t.id))
                 out.append(t)
         return out
 
@@ -137,11 +156,11 @@ class Tracker:
         """Confirmed tracks as compact dicts (meta / bulk kind 4): people down first, then nearest.
         The first kp_max also carry "kp" (keypoints_pct), so meta stays under ~900 B."""
         live = [t for t in self.tracks if t.confirmed and not t.ghost]
-        live.sort(key=lambda t: (t.ps != "D", t.r if t.r is not None else 99.0))
+        live.sort(key=lambda t: (self.posture(t, now) != "D", t.r if t.r is not None else 99.0))
         out = []
         for i, t in enumerate(live[:limit]):
             p = {"id": t.id, "b": round(t.b), "r": None if t.r is None else round(t.r, 1), "rs": t.rs,
-                 "src": t.src(now) or "-", "ps": t.ps or "?", "c": t.c}
+                 "src": t.src(now) or "-", "ps": self.posture(t, now) or "?", "c": t.c}
             kp = keypoints_pct(t.det) if i < kp_max else None
             if kp is not None:
                 p["kp"] = kp
