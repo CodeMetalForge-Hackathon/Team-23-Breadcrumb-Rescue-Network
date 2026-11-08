@@ -204,7 +204,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
       <button data-node="B2" title="Mark B2 at SP1's position">B2 here</button><button data-node="B1" title="Mark B1 at SP1's position">B1 here</button><button data-node="BASE" title="Mark BASE at SP1's position">BASE here</button>
       <button id="plan-pause" aria-pressed="false" title="Pause mapping before setting the rig down on the floor; resume after picking it up at the same spot">Pause map</button>
       <button id="plan-reset" title="Start a new map and clear relay positions">Reset map</button>
-      <span class="plan-hint">Scroll to zoom · drag to pan</span>
+      <span class="plan-hint">Purple dashed circle = suggested relay spot · scroll to zoom · drag to pan</span>
     </div>
     <div id="plan-body">
       <div id="planwrap"><canvas id="plan" aria-label="Floor plan; scroll to zoom, drag empty space to pan or a relay to move it"></canvas></div>
@@ -728,10 +728,11 @@ function drawPlan() {
   }
   g.setLineDash([]);
   // suggested relay spots
-  for (const r of d.relays || []) {
+  (d.relays || []).forEach((r, i) => {
     g.strokeStyle = C.hazard; g.lineWidth = 3; g.setLineDash([4, 4]);
     g.beginPath(); g.arc(sx(r.x), sy(r.y), 14, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]);
-  }
+    if (PLAN.labels) markerText(g, sx(r.x), sy(r.y), `place relay ${i + 1}`, occupied);
+  });
   // relay nodes
   for (const id of CHAIN) {
     const p = pos(id); if (!p) continue;
