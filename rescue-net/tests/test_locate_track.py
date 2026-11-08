@@ -297,3 +297,15 @@ def test_lidar_body_veto_switch():
     scan = (np.full(20, b) + np.linspace(-2, 2, 20), np.full(20, 1500.0))   # a return on the body at 1.5 m
     assert observe(cut, "C", scan, c).ps == "?"
     assert observe(cut, "C", scan, {**c, "lidar_body_veto": False}).ps == "D"
+
+
+def test_foreshortened_torso_is_down():
+    from spotter.posture import classify
+    c = {**cfg(), "lidar_body_veto": False}
+    # lying with feet toward the camera: torso looks upright in the image but is ~0.1 m long at its range
+    feet_on = body(0.4, 0.0, 0.8, 0.56, 5)
+    feet_on.kpts[11:13, 1] = feet_on.kpts[5, 1] + 0.2            # shoulders -> hips 0.2 image heights
+    assert classify(feet_on, c, scale_m=0.54)[0] == "D"          # 0.2 * 0.54 = 0.11 m (1.08 m away)
+    assert classify(feet_on, c, scale_m=2.0)[0] == "U"           # same picture 4 m away: a real 0.4 m torso
+    assert classify(feet_on, c)[0] == "U"                        # range unknown: no claim
+    assert classify(feet_on, c, scale_m=0.54, extent_m=1.0)[0] == "?"   # 1 m visible height: not lying

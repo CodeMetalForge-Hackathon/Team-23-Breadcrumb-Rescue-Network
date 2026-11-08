@@ -5,6 +5,9 @@ A false "person down / possible casualty" is worse than "?", so D needs positive
   - a body segment far from vertical: the torso (shoulders -> hips), else the shins (knees -> ankles), else
     hips -> ankles; >= down_angle_deg is D, <= up_angle_deg is U, in between is "?". The rig's roll (from the
     accelerometer, when imu_roll_axis is set) is taken out first;
+  - or a torso foreshortened along the line of sight: shoulders and hips both visible but less than
+    short_torso_m (0.18 m) apart at the person's LiDAR range. An upright torso is 0.4-0.5 m; someone lying with
+    head or feet toward the camera looks "upright" in the image but has a torso of about 0.1 m;
   - and nothing contradicting it: the LiDAR hitting the body at the person's range means the body crosses the
     scan plane (chest / waist height on the rig), so the person is not lying flat; a visible vertical extent of
     upright_min_m (0.9 m) or more cannot be a person lying down (a box cut by the image edge still gives a lower
@@ -60,9 +63,10 @@ def cut_by_edge(det, margin=0.025):
     return det.x0 <= margin or det.y0 <= margin or det.x1 >= 1 - margin or det.y1 >= 1 - margin
 
 
-def classify(det, cfg, x_scale=16 / 9, roll_deg=0.0, extent_m=None, lidar_body=False):
+def classify(det, cfg, x_scale=16 / 9, roll_deg=0.0, extent_m=None, lidar_body=False, scale_m=None):
     """-> (ps, why): ps is "U", "D" or "?". extent_m = visible height in metres (LiDAR range known),
-    lidar_body = the LiDAR has a return from this person's body."""
+    lidar_body = the LiDAR has a return from this person's body (and the veto is on), scale_m = metres per
+    image height at the person's range (None if unknown)."""
     up_a, down_a = _get(cfg, "up_angle_deg", 35), _get(cfg, "down_angle_deg", 60)
     ps, why, ang = "?", "no body segment visible", None
     kpts = getattr(det, "kpts", None)
@@ -73,6 +77,12 @@ def classify(det, cfg, x_scale=16 / 9, roll_deg=0.0, extent_m=None, lidar_body=F
                 ps = "D" if ang >= down_a else "U" if ang <= up_a else "?"
                 why = f"{name} {ang:.0f}deg"
                 break
+    if kpts is not None and scale_m and ps != "D":
+        p, q = _mid(kpts, L_SH, R_SH), _mid(kpts, L_HIP, R_HIP)
+        if p is not None and q is not None:
+            torso_m = math.hypot((q[0] - p[0]) * x_scale, q[1] - p[1]) * scale_m
+            if torso_m < _get(cfg, "short_torso_m", 0.18):
+                ps, why, ang = "D", f"torso foreshortened {torso_m:.2f} m", ang or 0.0
     if ang is None and not cut_by_edge(det):
         w, h = (det.x1 - det.x0) * x_scale, det.y1 - det.y0
         if h > 0 and w / h <= 0.8:

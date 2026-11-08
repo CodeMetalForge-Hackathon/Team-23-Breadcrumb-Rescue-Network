@@ -20,6 +20,7 @@ DEFAULTS = {
     # upright, in between "?"; LiDAR / height vetoes apply below down_sure_deg; >= upright_min_m visible = upright.
     # imu_roll_axis: accelerometer axis that grows when the rig rolls clockwise seen from behind ("x", "-y", ...)
     "down_angle_deg": 60, "up_angle_deg": 35, "down_sure_deg": 75, "upright_min_m": 0.9, "imu_roll_axis": "",
+    "short_torso_m": 0.18,                         # shoulders -> hips shorter than this (LiDAR range known) = lying
     "down_aspect": 1.3,
     "bulk_period": 0.25, "bulk_gap": 0.003,        # live view over B2 Wi-Fi: seconds per round, seconds between chunks
     "thermal_detect": True, "thermal_det_every": 2, "thermal_min_score": 0.45,   # pose model on the USB thermal camera
