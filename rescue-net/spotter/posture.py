@@ -12,8 +12,8 @@ A false "person down / possible casualty" is worse than "?", so D needs positive
     scan plane (chest / waist height on the rig), so the person is not lying flat; a visible vertical extent of
     upright_min_m (0.9 m) or more cannot be a person lying down (a box cut by the image edge still gives a lower
     bound, so this also turns "?" into U).
-Only the torso gives D: level shins or legs alone are someone sitting with their feet up as often as someone
-lying. A box cut by the image edge gives D only with cut_min_torso_kp (3) of the 2 shoulders + 2 hips visible.
+Level shins or legs alone give D only for a whole box (legs_down): cut by the image edge they are someone
+sitting with their feet up as often as someone lying. A box cut by the image edge gives D only with cut_min_torso_kp (3) of the 2 shoulders + 2 hips visible.
 The box shape never gives D: the camera's field of view is narrow, and a box cut by the image edge (or a person
 partly hidden) says nothing about posture. An uncut box clearly taller than wide gives U.
 Coordinates are normalised 0..1; x_scale = image width / height, so x * x_scale is comparable to y.
@@ -78,7 +78,7 @@ def classify(det, cfg, x_scale=16 / 9, roll_deg=0.0, extent_m=None, lidar_body=F
             if ang is not None:
                 ps = "D" if ang >= down_a else "U" if ang <= up_a else "?"
                 why = f"{name} {ang:.0f}deg"
-                if ps == "D" and name != "torso":
+                if ps == "D" and name != "torso" and (cut_by_edge(det) or not _get(cfg, "legs_down", True)):
                     ps = "?"                          # legs out level (sitting, feet up) is not a person down
                 break
     if kpts is not None and scale_m and ps != "D":

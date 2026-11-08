@@ -17,6 +17,22 @@ from spotter.locate import Obs, angdiff
 SEEN_S = 1.0          # a camera counts towards a track's src if it saw the person this recently
 
 
+def kp_count(det, min_conf=0.5):
+    if not hasattr(det, "kpts"):
+        return 17                                     # a box-only detector: nothing to judge by
+    return 0 if det.kpts is None else int(sum(1 for k in det.kpts if k[2] >= min_conf))
+
+
+def dedupe_obs(obs, deg=4.0, m=0.5):
+    """Two boxes of one person from the same camera (survived NMS): keep the more confident one."""
+    out = []
+    for o in sorted(obs, key=lambda o: -o.c):
+        if not any(abs(angdiff(o.b, k.b)) <= deg and (o.r is None or k.r is None or abs(o.r - k.r) <= m)
+                   for k in out):
+            out.append(o)
+    return out
+
+
 def pair_cameras(cam_obs, th_obs, merge_deg):
     """Pi-camera and thermal observations of the same person (bearings within merge_deg) -> one "CT" obs."""
     pairs = sorted((abs(angdiff(c.b, t.b)), i, j) for i, c in enumerate(cam_obs) for j, t in enumerate(th_obs))
@@ -87,6 +103,7 @@ class Tracker:
         self.cam_fov = cam_fov             # RGB camera (yaw, half width) in degrees, for thermal ghosts
         self.dedupe_deg, self.dedupe_s = dedupe_deg, dedupe_s
         self.need_thermal_for_down, self.thermal_seen_s = need_thermal_for_down, thermal_seen_s
+        self.min_th_kp = 3
         self.sent = deque()                # (time, bearing, down?, track id) of the alerts sent
         self.tracks = []
         self._next = 1
@@ -100,7 +117,10 @@ class Tracker:
 
     def update(self, cam_obs, th_obs, now):
         """Feed one frame's observations. Returns the live tracks."""
-        obs = pair_cameras(list(cam_obs), list(th_obs), self.merge_deg)
+        obs = pair_cameras(dedupe_obs(cam_obs), dedupe_obs(th_obs), self.merge_deg)
+        # thermal only, almost no keypoints: warm clutter or a reflection, not a person (the RGB camera, or
+        # pose keypoints on the thermal image, are needed)
+        obs = [o for o in obs if not (o.src == "T" and kp_count(o.det) < self.min_th_kp)]
         cand = []
         for ti, t in enumerate(self.tracks):
             for oi, o in enumerate(obs):

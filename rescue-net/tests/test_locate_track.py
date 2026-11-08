@@ -368,12 +368,14 @@ def test_no_down_closer_than_a_metre():
     assert far.ps == "D" and near.ps == "?" and near.r == pytest.approx(0.9, abs=0.05)
 
 
-def test_level_legs_alone_are_not_down():
+def test_level_legs_alone_are_not_down_when_cut():
     k = np.zeros((17, 3), np.float32)
     k[13] = k[14] = (0.40, 0.70, 1)                      # knees and ankles level: feet up on a desk
     k[15] = k[16] = (0.60, 0.70, 1)
-    d = PoseDetection("person", 0.9, 0.3, 0.4, 0.7, 0.8, k)
+    d = PoseDetection("person", 0.9, 0.3, 0.4, 0.7, 1.0, k)               # cut by the bottom edge
     assert observe(d, "C", scan_with([(-5, 5, 2.0)]), cfg()).ps == "?"
+    whole = PoseDetection("person", 0.9, 0.3, 0.4, 0.7, 0.8, k)
+    assert observe(whole, "C", scan_with([(-5, 5, 2.0)]), cfg(legs_down=False)).ps == "?"
 
 
 def test_tilted_rig_uses_box_size_range():
@@ -383,3 +385,15 @@ def test_tilted_rig_uses_box_size_range():
     level = observe(d, "C", scan_with([(-5, 5, 2.2)]), cfg(), tilt_deg=3.0)
     tilted = observe(d, "C", scan_with([(-5, 5, 2.2)]), cfg(), tilt_deg=15.0)
     assert level.rs == "L" and tilted.rs == "S" and tilted.r is not None
+
+
+def test_thermal_only_without_keypoints_is_dropped_and_duplicates_merge():
+    k = np.zeros((17, 3), np.float32)
+    k[5:12, 2] = 1                                    # 7 keypoints visible
+    real = PoseDetection("person", 0.6, 0.4, 0.2, 0.6, 0.9, k)
+    blob = PoseDetection("person", 0.5, 0.4, 0.2, 0.6, 0.9, np.zeros((17, 3), np.float32))
+    T = lambda b, d, c=60: Obs("T", b, 2.0, "L", "U", c, d, 0.5)
+    tr = Tracker()
+    for i in range(4):
+        tr.update([], [T(345, real), T(346, real, 50), T(13, blob)], i * 0.1)
+    assert [round(t.b) for t in tr.tracks] == [345]

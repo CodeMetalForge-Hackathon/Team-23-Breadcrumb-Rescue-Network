@@ -71,7 +71,7 @@ def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0, tilt_deg=None):
 
     The LiDAR range is not trusted (box-size range instead, rs "S") when the rig is tilted more than
     lidar_max_tilt_deg (the scan plane then hits the floor or a desk in front of the person), or when the box is
-    whole and the LiDAR says less than half of what its size says (something between the rig and the person).
+    whole, not down, and the LiDAR says less than half of what its upright size says (a desk in between).
     No "D" closer than down_min_m: only part of a body that close is in view."""
     hfov_k, yaw_k, dir_k, aspect_hw = CAMERAS[src]
     hfov, yaw, direction = float(cfg[hfov_k]), float(cfg[yaw_k]), int(cfg[dir_k])
@@ -82,9 +82,6 @@ def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0, tilt_deg=None):
     r_up = size_range(det, hfov, aspect_hw, "U")
     if r_l is not None and tilt_deg is not None and tilt_deg > _cfg(cfg, "lidar_max_tilt_deg", 10.0):
         r_l = None                                   # tilted rig: the scan plane is not at body height
-    if r_l is not None and not cut_by_edge(det) and r_up is not None and r_down is not None \
-            and r_l < 0.5 * min(r_up, r_down):
-        r_l = None                                   # LiDAR hits something in front of a whole body
     # the LiDAR return is this body (it crosses the scan plane), not the wall behind someone lying below it
     body = r_l is not None and r_down is not None and r_l <= 1.4 * r_down + 0.3
     scale = 2 * math.tan(math.radians(hfov) / 2) * aspect_hw * r_l if body else None   # metres per image height
@@ -92,6 +89,8 @@ def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0, tilt_deg=None):
     # lidar_body_veto off when the rig sits on the floor: its scan plane then hits people lying down too
     ps, why = classify(det, cfg, x_scale or 1 / aspect_hw, roll_deg, extent, body and cfg["lidar_body_veto"],
                        scale)
+    if r_l is not None and ps != "D" and not cut_by_edge(det) and r_up is not None and r_l < 0.5 * r_up:
+        r_l = None                                   # LiDAR hits something in front of a whole upright body
     r_s = r_down if ps == "D" else r_up
     # LiDAR far behind what the box size says: it is looking past the person (lying below the scan plane)
     if r_l is not None and (r_s is None or r_l <= 1.8 * r_s + 0.5):
