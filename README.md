@@ -101,6 +101,10 @@ Details are in [rescue-net/README.md](rescue-net/README.md). In short:
 4. **No hardware?** Run `python -m dashboard.app --mock`, or replay a log with `--replay logs/messages-YYYYMMDD.jsonl`. `python -m mapping.replay <walk.jsonl.gz> out.png` builds a floor plan from a recorded walk.
 5. **Tests:** `cd rescue-net && python -m pytest -q`.
 
+## Next steps
+
+- Phone localization by trilateration: every relay and the walking spotter report per-device BLE RSSI, and the command post solves a weighted least-squares position fix from the relay positions recorded with D2 (expected indoor error about 3 to 5 m). See [docs/writeup.md](docs/writeup.md).
+
 ## Team
 
 - Xiaofan Liu (UMass Amherst): radio firmware, bulk link, command post, mapping integration

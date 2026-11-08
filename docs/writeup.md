@@ -49,6 +49,22 @@ A responder carries a handheld **spotter**: a Raspberry Pi 5 with an AI accelera
 
 Under degraded comms, sending less matters more than sending faster. Splitting critical alerts from nice-to-have data, and degrading the second one gracefully, is what keeps the system useful when links get bad.
 
+## Next step: phone localization by trilateration
+
+**Today.** B2 scans BLE and reports aggregates about every 10 s: devices heard, strongest RSSI, number of Apple devices, and devices above -45 dBm. The SOS portal runs on B1. On the floor plan, phones are shown as a zone around the relay that heard them, not as a position; that view is being added now.
+
+**Design.**
+- Every breadcrumb (BASE, B1, B2) reports its strongest K devices, each with its own RSSI and a short hash of its BLE address.
+- The command post matches the same address across nodes within a few seconds. It solves a weighted least-squares fix from the node positions recorded with the D2 button.
+- The spotter's Pi also scans BLE while walking, so one device is measured from many known poses. This breaks the mirror ambiguity of a straight relay chain.
+- Expected indoor error is about 3 to 5 m.
+
+**Known limits.**
+- BLE scanning shares the radio with ESP-NOW and Wi-Fi, so it lowers bulk throughput on a forwarding relay.
+- iPhone BLE addresses rotate about every 15 minutes.
+- An SOS phone's Wi-Fi and BLE addresses cannot be linked to each other.
+- SP1 (RP2040 + LoRa) has no BLE.
+
 ## What's next
 
 - UWB ranging between relays for better positions.
