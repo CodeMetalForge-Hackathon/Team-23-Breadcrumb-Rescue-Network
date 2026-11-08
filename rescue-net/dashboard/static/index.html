@@ -14,6 +14,7 @@
   --heat: #ff7a1a;   --heat-bg: #3a1e08;
   --hazard: #c084fc; --hazard-bg: #2b1340;
   --other: #9ca3af;  --other-bg: #1f2329;
+  --signal-good: #51d5ad; --signal-fair: #e4b857; --signal-poor: #ef6f83;
   color-scheme: dark;
 }
 :root[data-theme="light"] {
@@ -74,7 +75,14 @@ section.plan h2 { display: flex; gap: 12px; align-items: baseline; flex: 0 0 aut
 #plan-tools button { flex: 0 0 auto; font-size: 12px; line-height: 1.2; padding: 5px 8px; border-width: 1px; border-radius: 5px; }
 #plan-tools #plan-reset { margin-left: 4px; color: var(--muted); border-color: var(--line); }
 #plan-tools button.active { border-color: var(--info); color: var(--info); }
-#plan-tools .plan-hint { margin-left: auto; font-size: 11px; }
+#plan-key { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; min-height: 15px;
+            margin-bottom: 7px; font-size: 11px; color: var(--muted); }
+#plan-key .plan-hint { margin-left: auto; white-space: nowrap; }
+#plan-signal-key { display: flex; align-items: center; gap: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#plan-signal-key span { display: inline-flex; align-items: center; gap: 4px; }
+#plan-signal-key i { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                     border: 1px solid #0d1014; box-shadow: 0 0 0 1px var(--muted); }
+#plan-signal-caption { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 #plan-people { min-width: 0; min-height: 0; overflow-y: auto; border-left: 1px solid var(--line); padding-left: 10px; }
 #plan-people h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
 #plan-person-list { display: flex; flex-direction: column; gap: 5px; }
@@ -169,7 +177,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
   section { padding: 12px 14px; }
   h2 { font-size: 20px; }
   #plan-body { grid-template-columns: minmax(0, 1fr) 160px; }
-  #plan-tools .plan-hint { display: none; }
+  #plan-key .plan-hint { display: none; }
 }
 
 @media (max-width: 1000px) {
@@ -201,10 +209,19 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
       <button id="plan-fit" class="active" title="Return to automatic map fitting">Fit</button>
       <button id="plan-labels" class="active" aria-pressed="true" title="Show or hide small marker labels">Labels</button>
       <button id="plan-raw" class="active" aria-pressed="true" title="Show the raw LiDAR scan and occupancy map">Raw scan</button>
+      <button id="plan-signal" class="active" aria-pressed="true" aria-controls="plan" title="Show measured Wi-Fi signal along the walked path">Signal</button>
       <span>Mark relay:</span>
       <button data-node="B2" title="Mark B2 at SP1's position">B2 here</button><button data-node="B1" title="Mark B1 at SP1's position">B1 here</button><button data-node="BASE" title="Mark BASE at SP1's position">BASE here</button>
       <button id="plan-pause" aria-pressed="false" title="Pause mapping before setting the rig down on the floor; resume after picking it up at the same spot">Pause map</button>
       <button id="plan-reset" title="Start a new map and clear relay positions">Reset map</button>
+    </div>
+    <div id="plan-key">
+      <span id="plan-signal-key" aria-label="Measured Wi-Fi signal legend">
+        <span id="plan-signal-caption">Wi-Fi · no samples</span>
+        <span><i style="background:var(--signal-good)"></i>Good ≥ −67</span>
+        <span><i style="background:var(--signal-fair)"></i>Fair −77 to &lt;−67</span>
+        <span><i style="background:var(--signal-poor)"></i>Poor &lt; −77 dBm</span>
+      </span>
       <span class="plan-hint">Purple dashed circle = suggested relay spot · scroll to zoom · drag to pan</span>
     </div>
     <div id="plan-body">
@@ -638,15 +655,25 @@ setInterval(refreshRemote, 300);
 
 // ---- floor plan: SLAM map, spotter path, relays, people (all in metres, map frame from the dashboard) ----
 const PLAN = { data: null, img: null, imgV: -1, view: null, manualView: null,
-               drag: null, dragPos: null, pan: null, labels: true, rawScan: null, highlight: null, rows: new Map() };
+               drag: null, dragPos: null, pan: null, labels: true, rawScan: null, signal: true, highlight: null, rows: new Map() };
+try { PLAN.signal = localStorage.getItem("rn-plan-signal") !== "off"; } catch (e) { /* storage blocked: default on */ }
+function signalControl() {
+  $("plan-signal").setAttribute("aria-pressed", String(PLAN.signal));
+  $("plan-signal").classList.toggle("active", PLAN.signal);
+}
+signalControl();
 const CHAIN = ["B2", "B1", "BASE"];
 const freshPerson = (person) => Number.isFinite(person.age) && person.age >= 0 && person.age < 15;
 const planWalls = (data) => (Array.isArray(data.walls) ? data.walls : [])
   .filter((wall) => Array.isArray(wall) && wall.length === 4 && wall.every(Number.isFinite));
 const showRawPlan = (data) => PLAN.rawScan ?? (planWalls(data).length === 0);
+const planSignal = (data) => (Array.isArray(data.rssi) ? data.rssi.slice(-800) : [])
+  .filter((p) => Array.isArray(p) && p.length >= 3 && p.slice(0, 3).every(Number.isFinite) && p[2] >= -150 && p[2] <= 0);
+const signalLevel = (rssi) => rssi >= -67 ? "good" : rssi >= -77 ? "fair" : "poor";
 function planColors() {
   const css = getComputedStyle(document.documentElement), v = (n) => css.getPropertyValue(n).trim();
-  return { ok: v("--ok"), warn: v("--warn"), off: v("--off"), bad: v("--sos"), info: v("--info"), hazard: v("--hazard"), person: v("--person") };
+  return { ok: v("--ok"), warn: v("--warn"), off: v("--off"), bad: v("--sos"), info: v("--info"), hazard: v("--hazard"), person: v("--person"),
+           signal: { good: v("--signal-good"), fair: v("--signal-fair"), poor: v("--signal-poor") } };
 }
 function planBounds(d) {
   if (PLAN.manualView) return PLAN.manualView;
@@ -715,6 +742,17 @@ function drawPlan() {
     g.strokeStyle = C.info; g.lineWidth = 2; g.globalAlpha = 0.8; g.beginPath();
     d.path.forEach((p, i) => (i ? g.lineTo(sx(p[0]), sy(p[1])) : g.moveTo(sx(p[0]), sy(p[1]))));
     g.stroke(); g.globalAlpha = 1;
+  }
+  // Measured samples only: do not interpolate a signal level through unsampled
+  // stretches. Draw before relay suggestions, people and labels.
+  const samples = planSignal(d), node = typeof d.rssi_node === "string" ? d.rssi_node.trim().slice(0, 16) : "";
+  $("plan-signal-caption").textContent = `Wi-Fi${node ? ` to ${node}` : ""}${!PLAN.signal ? " · hidden" : !samples.length ? " · no samples" : ""}`;
+  $("plan-signal-key").title = `${samples.length} measured Wi-Fi samples${node ? ` to ${node}` : ""}. Good ≥ −67 dBm; fair ≥ −77 and < −67 dBm; poor < −77 dBm. No signal is inferred between samples.`;
+  if (PLAN.signal) for (const [x, y, rssi] of samples) {
+    const X = sx(x), Y = sy(y);
+    if (X < -3 || X > W + 3 || Y < -3 || Y > H + 3) continue;
+    g.fillStyle = C.signal[signalLevel(rssi)]; g.strokeStyle = "#0d1014"; g.lineWidth = 1;
+    g.beginPath(); g.arc(X, Y, 3, 0, 2 * Math.PI); g.fill(); g.stroke();
   }
   // relay chain links: spotter -> B2 -> B1 -> BASE (where positions are known)
   const pos = (id) => {
@@ -874,6 +912,12 @@ $("plan-labels").addEventListener("click", () => {
 $("plan-raw").addEventListener("click", () => {
   if (!PLAN.data) return;
   PLAN.rawScan = !showRawPlan(PLAN.data);
+  drawPlan();
+});
+$("plan-signal").addEventListener("click", () => {
+  PLAN.signal = !PLAN.signal;
+  try { localStorage.setItem("rn-plan-signal", PLAN.signal ? "on" : "off"); } catch (e) { /* keep the current viewer setting in memory */ }
+  signalControl();
   drawPlan();
 });
 function manualPlanView(cx, cy, scale) {
