@@ -276,6 +276,7 @@ def test_calib_set_config_and_summary(tmp_path):
     o = observe(det, "C", None, c)
     for i in range(3):
         rec.step(c, [o], [], (np.arange(10.0) * 36, np.full(10, 2000.0)), ImuSample(0, 1.0, 2.0, 21.0, 3))
+    rec.f.close()                                     # normally closed when calib_record_s runs out
     s = calib.summary(rec.path)
     assert "lying" in s["file"] and s["frames"] == 3 and s["cam_seen"] == 3 and s["cam_ps"]["D"] == 3
     assert s["acc_mean"] == [1.0, 2.0, 21.0]
