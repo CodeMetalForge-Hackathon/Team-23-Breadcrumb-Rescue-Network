@@ -110,6 +110,14 @@ def main():
             if cfg.data.get("link_watch", True):    # B2 rebooting leaves a stale Wi-Fi association
                 from spotter.linkwatch import LinkWatch
                 LinkWatch(con=cfg.data.get("link_con", "RESCUE-LINK")).start()
+    voice = None
+    if not args.mock and cfg.data.get("voice", True):    # spoken prompts from B2 (relay placement), UDP 5006
+        try:
+            from spotter.voice import Voice
+            voice = Voice(port=int(cfg.data.get("voice_port", 5006)), rate_s=float(cfg.data.get("voice_rate_s", 8)),
+                          beep_gpio=cfg.data.get("voice_beep_gpio")).start()
+        except Exception:
+            log.exception("voice prompts off")
     thermal.start()
 
     debouncer = Debouncer(cooldown_s=cfg["cooldown_s"])

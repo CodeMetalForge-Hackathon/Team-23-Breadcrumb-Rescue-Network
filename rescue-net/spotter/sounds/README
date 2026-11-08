@@ -1,0 +1,4 @@
+Spoken prompts for spotter/voice.py, one wav per SAY key k. Rendered on a laptop (the Pi has no TTS):
+  espeak-ng -s 150 -a 180 -w place1.wav "Place relay B 1 here, then press D 2."
+place2 "Place relay B 2 here, then press D 2."  lost1 "Link to relay B 1 lost."  lost2 "Link to relay B 2 lost."
+lora "LoRa only mode. Alerts by radio only."  bulk "Wi-Fi link back. Images resumed."
