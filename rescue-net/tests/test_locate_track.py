@@ -280,3 +280,11 @@ def test_calib_set_config_and_summary(tmp_path):
     s = calib.summary(rec.path)
     assert "lying" in s["file"] and s["frames"] == 3 and s["cam_seen"] == 3 and s["cam_ps"]["D"] == 3
     assert s["acc_mean"] == [1.0, 2.0, 21.0]
+
+
+def test_posture_takes_a_config_object(tmp_path):
+    from spotter.config import Config
+    from spotter.posture import classify, posture
+    c = Config(tmp_path / "missing.json")                # fusion.analyze passes the Config itself, not a dict
+    assert posture(body(0.2, 0.5, 0.7, 0.7, 85), c) == "D"
+    assert classify(body(0.0, 0.3, 0.6, 1.0, 65), c, extent_m=1.1)[0] == "?"

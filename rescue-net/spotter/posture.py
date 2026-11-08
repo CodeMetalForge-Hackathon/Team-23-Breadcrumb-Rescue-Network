@@ -48,6 +48,14 @@ def torso_angle(kpts, x_scale, roll_deg=0.0):
     return segment_angle(kpts, (L_SH, R_SH), (L_HIP, R_HIP), x_scale, roll_deg)
 
 
+def _get(cfg, key, default):
+    """cfg may be a dict or a spotter.config.Config (which only has [])."""
+    try:
+        return cfg[key]
+    except KeyError:
+        return default
+
+
 def cut_by_edge(det, margin=0.025):
     return det.x0 <= margin or det.y0 <= margin or det.x1 >= 1 - margin or det.y1 >= 1 - margin
 
@@ -55,7 +63,7 @@ def cut_by_edge(det, margin=0.025):
 def classify(det, cfg, x_scale=16 / 9, roll_deg=0.0, extent_m=None, lidar_body=False):
     """-> (ps, why): ps is "U", "D" or "?". extent_m = visible height in metres (LiDAR range known),
     lidar_body = the LiDAR has a return from this person's body."""
-    up_a, down_a = cfg.get("up_angle_deg", 35), cfg.get("down_angle_deg", 60)
+    up_a, down_a = _get(cfg, "up_angle_deg", 35), _get(cfg, "down_angle_deg", 60)
     ps, why, ang = "?", "no body segment visible", None
     kpts = getattr(det, "kpts", None)
     if kpts is not None:
@@ -69,11 +77,11 @@ def classify(det, cfg, x_scale=16 / 9, roll_deg=0.0, extent_m=None, lidar_body=F
         w, h = (det.x1 - det.x0) * x_scale, det.y1 - det.y0
         if h > 0 and w / h <= 0.8:
             ps, why = "U", f"box {w / h:.2f} wide/high"
-    tall = extent_m is not None and extent_m >= cfg.get("upright_min_m", 0.9)
+    tall = extent_m is not None and extent_m >= _get(cfg, "upright_min_m", 0.9)
     # a clearly horizontal body fully in view stands (lies) on its own; the LiDAR / extent checks are for the
     # doubtful cases (cut by the image edge, or an angle near the threshold), so a wall right behind a person
     # lying on the floor does not hide them
-    doubtful = cut_by_edge(det) or ang is None or ang < cfg.get("down_sure_deg", 75)
+    doubtful = cut_by_edge(det) or ang is None or ang < _get(cfg, "down_sure_deg", 75)
     if ps == "D" and tall and doubtful:
         return "?", why + f", but {extent_m:.1f} m tall"
     if ps == "D" and lidar_body and doubtful:
