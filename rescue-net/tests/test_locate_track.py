@@ -259,3 +259,23 @@ def test_calib_fit_recovers_yaw_hfov_direction():
     pts += [(0.5, 200.0)] * 20                            # outliers: someone else / the wall
     yaw, hfov, direction, rms, frac = calib.fit(pts)
     assert frac > 0.8 and direction == -1 and abs(((yaw - 350) + 180) % 360 - 180) < 1.5 and abs(hfov - 62) < 3 and rms < 1.5
+
+
+def test_calib_set_config_and_summary(tmp_path):
+    from spotter import calib
+    from spotter.imu import ImuSample
+    p = tmp_path / "config.json"
+    p.write_text('{\n  "a": 1, "calib_record_s": 0, "calib_tag": ""\n}\n')
+    calib.set_config(p, calib_tag="lying", calib_record_s=25)
+    assert json.loads(p.read_text()) == {"a": 1, "calib_record_s": 25, "calib_tag": "lying"}
+    calib.set_config(p, calib_record_s=0, extra=2)
+    assert json.loads(p.read_text())["extra"] == 2 and p.read_text().startswith('{\n  "a": 1, "calib_record_s": 0,')
+    rec = calib.Recorder(tmp_path)
+    c = {**cfg(), "calib_record_s": 5, "calib_tag": "lying"}
+    det = body(0.2, 0.5, 0.7, 0.7, 85)
+    o = observe(det, "C", None, c)
+    for i in range(3):
+        rec.step(c, [o], [], (np.arange(10.0) * 36, np.full(10, 2000.0)), ImuSample(0, 1.0, 2.0, 21.0, 3))
+    s = calib.summary(rec.path)
+    assert "lying" in s["file"] and s["frames"] == 3 and s["cam_seen"] == 3 and s["cam_ps"]["D"] == 3
+    assert s["acc_mean"] == [1.0, 2.0, 21.0]
