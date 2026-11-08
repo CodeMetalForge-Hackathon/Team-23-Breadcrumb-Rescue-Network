@@ -427,3 +427,13 @@ def test_lidar_window_covers_a_close_wide_box():
     d = det(0.55, 0.0, 0.95, 1.0)                        # someone close, right of centre, 20+ deg wide
     s = scan_with([(14, 26, 0.7)], wall_m=2.6)
     assert observe(d, "C", s, cfg()).r == pytest.approx(0.7, abs=0.05)
+
+
+def test_far_track_at_the_same_bearing_is_absorbed_by_the_near_one():
+    tr, sent = Tracker(), []
+    for i in range(8):                                  # thermal (wall, 2.6 m) and RGB (person, 0.9 m) alternate
+        o = ob(9, r=2.6, src="T") if i % 2 else ob(9, r=0.9)
+        tr.update([o] if o.src == "C" else [], [o] if o.src == "T" else [], i * 0.1)
+        sent += tr.due(i * 0.1, cooldown_s=10)
+    assert len(tr.tracks) == 1 and tr.tracks[0].r == pytest.approx(0.9, abs=0.1)
+    assert len(sent) <= 1

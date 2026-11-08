@@ -122,6 +122,7 @@ class Tracker:
         self.dedupe_deg, self.dedupe_s = dedupe_deg, dedupe_s
         self.need_thermal_for_down, self.thermal_seen_s = need_thermal_for_down, thermal_seen_s
         self.min_th_kp = 3
+        self.absorb_deg, self.absorb_s = 5.0, 0.5
         self.lit = False                   # set per frame from the RGB image brightness
         self.sent = deque()                # (time, bearing, down?, track id) of the alerts sent
         self.tracks = []
@@ -163,6 +164,20 @@ class Tracker:
             if oi not in used_o:
                 self.tracks.append(Track(self._new_id(), o, now))
         self.tracks = [t for t in self.tracks if now - t.last_seen <= self.max_age_s]
+        # one person per bearing across frames too: the RGB and thermal detections of someone close to the rig
+        # can arrive in different frames, one LiDAR window on them and one on the wall behind; the nearer
+        # track absorbs a farther one within absorb_deg (both seen in the last absorb_s)
+        drop = set()
+        for a in self.tracks:
+            for b in self.tracks:
+                if (a is not b and id(b) not in drop and a.r is not None and b.r is not None and a.r < b.r
+                        and abs(angdiff(a.b, b.b)) <= self.absorb_deg
+                        and now - a.last_seen <= self.absorb_s and now - b.last_seen <= self.absorb_s):
+                    drop.add(id(b))
+                    a.hits = max(a.hits, b.hits)
+                    if b.last_alert is not None and (a.last_alert is None or b.last_alert > a.last_alert):
+                        a.last_alert, a.alerted_ps = b.last_alert, b.alerted_ps
+        self.tracks = [t for t in self.tracks if id(t) not in drop]
         for t in self.tracks:
             if t.last_seen == now:
                 t.ghost = bool(cam_obs and self.cam_fov and t.src(now) == "T"
