@@ -31,6 +31,16 @@ FOLD_S = 60                 # repeats of the same report (type + source + zone) 
 FOLD_TYPES = ("PERSON", "HEAT", "PHONE")
 ACK_DEFAULT = "Help is on the way"
 STATIC = Path(__file__).resolve().parent / "static"
+SL_KEEP_S = 600             # SOS phone listen readings (SL / SLR) kept 10 minutes
+SL_HIST = 6                 # readings per relay averaged for the SOS area (~2 min of 20 s repeats)
+SL_SOS_MATCH_S = 10         # an SL belongs to the SOS card from the same relay within 10 s
+CMD_TO = ("B1", "B2")
+CMD_C = ("lora", "bulk", "off", "on")
+ZONE_TYPES = ("PLACE", "SL", "SLR")     # firmware may send these with "z" and no "src"
+
+
+def _num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def priority(a):
@@ -53,6 +63,10 @@ class State:
         self.sender = None                        # callable(line: str) -> None, set by a source that can write
         self.map = MapState()                     # SLAM floor plan, people and relay positions
         self.remote = Remote(on_object=self.map.on_object)   # camera / thermal / LiDAR / meta via the bulk link
+        self.power = {}                           # node -> {"bt": %, "bv": V, "lo": 0/1} from its latest HB
+        self.sl = OrderedDict()                   # phone MAC tail -> SOS phone listen readings
+        self.mode = {"lora_only": False, "to": None, "sent": None, "confirmed": False}
+        self.last_cmd = None
 
     def set_source(self, connected, source):
         with self.lock:
@@ -83,8 +97,20 @@ class State:
                 if isinstance(node, str) and node:
                     self.nodes[node] = now
             t = msg.get("t")
+            if t == "HB" and isinstance(msg.get("src"), str):
+                self._heartbeat(msg, now)
             if t in ("HB", "ACK"):                # ACK is our own reply going down the chain
                 return True
+            if t in ("SL", "SLR"):                # readings for the SOS phone fix, not alert cards
+                self._listen(msg, now)
+                return True
+            if t == "PLACE":                      # repeated every 15 s until MARK: one info card per relay
+                for a in reversed(self.alerts):
+                    if a.get("t") == "PLACE" and a.get("z") == msg.get("z") and now - a["rx"] < FOLD_S:
+                        key, first, reps = a["key"], a.get("first", a["rx"]), a.get("reps", 1) + 1
+                        a.clear()
+                        a.update({**msg, "key": key, "rx": now, "handled": True, "reps": reps, "first": first})
+                        return True
             if t in FOLD_TYPES:
                 for a in reversed(self.alerts):
                     if (not a["handled"] and a.get("t") == t and a.get("src") == msg.get("src")
@@ -96,9 +122,72 @@ class State:
                                   "reps": reps, "first": first})
                         return True
             self.seq += 1
-            self.alerts.append({**msg, "key": str(self.seq), "rx": now, "handled": t == "MARK"})  # MARK: info only
+            self.alerts.append({**msg, "key": str(self.seq), "rx": now,
+                                "handled": t in ("MARK", "PLACE")})  # MARK, PLACE: info only
             del self.alerts[:-MAX_ALERTS]
             return True
+
+    def _heartbeat(self, msg, now):
+        """Latest battery and LoRa-only flag per node; absent fields mean unknown (no gauge)."""
+        lo = 1 if msg.get("lo") else 0
+        bt, bv = _num(msg.get("bt")), _num(msg.get("bv"))
+        self.power[msg["src"]] = {"bt": bt, "bv": bv, "lo": lo}
+        m = self.mode
+        if m["to"] == msg["src"] and m["sent"] is not None and bool(lo) == m["lora_only"]:
+            if not m["confirmed"]:
+                m["confirmed"], m["confirmed_at"] = True, now
+
+    def _listen(self, msg, now):
+        pm, z = msg.get("pm"), msg.get("z") or msg.get("src")
+        if not isinstance(pm, str) or not pm or not isinstance(z, str) or not z:
+            return
+        pm = pm.lower()[:12]
+        for k in [k for k, e in self.sl.items() if now - e["upd"] > SL_KEEP_S]:
+            del self.sl[k]
+        e = self.sl.pop(pm, None) or {"pm": pm, "t": now, "upd": now, "sos_key": None, "r": {}, "n": {}}
+        e.setdefault("h", {})                          # node -> last SL_HIST readings of this phone (all its SLs)
+        r, n = _num(msg.get("r")), _num(msg.get("n"))
+        if msg.get("t") == "SL":
+            e["t"], e["z"] = now, z                   # the relay that took the SOS; each SL starts a new listen round
+            e["r"], e["n"] = {}, {}
+            sos = [a for a in self.alerts if a.get("t") == "SOS" and (a.get("z") or a.get("src")) == z
+                   and abs(a["rx"] - now) <= SL_SOS_MATCH_S]
+            if sos:
+                e["sos_key"] = max(sos, key=lambda a: a["rx"])["key"]
+            # else: a repeat SL (the phone still on the "sent" page) keeps the SOS card it belongs to
+        if n == 0:                                     # listened, did not hear the phone
+            e["r"].pop(z, None)
+            e["n"][z] = 0
+        elif r is not None and -150 <= r < 0:
+            e["r"][z] = r
+            e["h"][z] = (e["h"].get(z) or [])[-(SL_HIST - 1):] + [r]
+            if n is not None:
+                e["n"][z] = int(n)
+        e["upd"] = now
+        self.sl[pm] = e                                # move to the end: newest last in the dict
+
+    def command(self, to, c):
+        """Serial command to BASE: LoRa-only / bulk on B2, or switch a relay off / on."""
+        if to not in CMD_TO or c not in CMD_C:
+            return 400, "to must be B1/B2 and c one of lora/bulk/off/on"
+        with self.lock:
+            sender = self.sender
+        if sender is None:
+            return 409, "this source cannot send (use --port or --hub)"
+        line = json.dumps({"t": "CMD", "to": to, "c": c}, separators=(",", ":"))
+        try:
+            sender(line)
+        except Exception as e:
+            log.warning("CMD send failed: %s", e)
+            return 502, f"send failed: {e}"
+        log.info("CMD sent %s", line)
+        now = time.time()
+        with self.lock:
+            self.last_cmd = {"to": to, "c": c, "sent": now}
+            if c in ("lora", "bulk"):
+                lora = c == "lora"
+                self.mode = {"lora_only": lora, "to": to, "sent": now, "confirmed": False}
+        return 200, "sent"
 
     def handle(self, key):
         with self.lock:
@@ -136,9 +225,15 @@ class State:
                 age = None if seen is None else now - seen
                 health = "grey" if age is None or age >= AMBER_S else ("green" if age < GREEN_S else "amber")
                 nodes[name] = {"last_seen": seen, "age": age, "health": health}
+                p = self.power.get(name)
+                if p:
+                    nodes[name].update(p)
             alerts = sorted(self.alerts, key=lambda a: (a["handled"], -priority(a), -a["rx"]))
             return {"now": now, "nodes": nodes, "alerts": alerts, "serial_connected": self.connected,
-                    "source": self.source, "stats": dict(self.stats), "can_send": self.sender is not None}
+                    "source": self.source, "stats": dict(self.stats), "can_send": self.sender is not None,
+                    "sl": [{k: (dict(v) if isinstance(v, dict) else v) for k, v in e.items()}
+                           for e in reversed(self.sl.values()) if now - e["upd"] <= SL_KEEP_S],
+                    "mode": dict(self.mode), "last_cmd": dict(self.last_cmd) if self.last_cmd else None}
 
 
 
@@ -146,7 +241,15 @@ def handle_line(state, raw, record=True):
     if (raw[:2] == b"$B") if isinstance(raw, bytes) else raw.startswith("$B"):   # bulk-link chunk
         state.remote.add(raw.decode("ascii", "replace") if isinstance(raw, bytes) else raw)
         return
-    msg = extract_message(parse_line(raw))
+    obj = parse_line(raw)
+    msg = extract_message(obj)
+    if msg is None and isinstance(obj, dict):      # PLACE / SL / SLR may carry only "z": z is the source
+        inner = obj if "t" in obj else next((v for v in obj.values() if isinstance(v, dict) and "t" in v), None)
+        if (isinstance(inner, dict) and inner.get("t") in ZONE_TYPES
+                and isinstance(inner.get("z"), str) and inner["z"]):
+            msg = {**inner, "src": inner["z"]}
+            if inner is not obj and isinstance(obj.get("rssi"), (int, float)):
+                msg["_rssi"] = obj["rssi"]
     if msg is None:                   # non-JSON, other teams' packets, or board status like {"sent":..}
         text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
         if text.strip():
@@ -358,6 +461,12 @@ def create_app(state):
         text = " ".join(str(body.get("msg") or ACK_DEFAULT).split())[:40]   # firmware keeps <= 40 bytes
         code, why = state.ack(key, text)
         return jsonify(ok=code == 200, why=why), code
+
+    @app.post("/api/cmd")
+    def api_cmd():
+        body = request.get_json(silent=True) or {}
+        code, why = state.command(body.get("to"), body.get("c"))
+        return jsonify(ok=code == 200, why=why, mode=state.snapshot()["mode"]), code
 
     @app.post("/api/handle/<key>")
     def api_handle(key):

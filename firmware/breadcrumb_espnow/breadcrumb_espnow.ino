@@ -16,13 +16,14 @@
 // Each relay appends its own ID to "rt" and adds "q": RSSI (dBm) of the hop it heard.
 //
 // Buttons: D0 (active low) sends a TEST PERSON alert from this node.
-//          D1 toggles demo topology (only accept messages from the configured neighbour).
+//          D1 held 1 s switches this relay off / on (no radio TX at all: the chain heals around it). BASE, B2: ignored.
 //          D2 sends MARK {"t":"MARK","z":<this node>}: the operator holds the spotter next to this node and
 //          presses it; the dashboard registers the node at the spotter's current SLAM pose.
 
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_task_wdt.h>
 #include <ArduinoJson.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
@@ -37,7 +38,9 @@
 #define HAS_LORA (__builtin_strcmp(NODE_ID, "B2") == 0)
 #endif
 #ifndef HAS_BLE
-#define HAS_BLE (__builtin_strcmp(NODE_ID, "B2") == 0)
+// BLE phone count off by default (build with -DHAS_BLE=1 to get it back on B2): B2 is the only gateway, and with
+// ~55 phones advertising it self-restarted 4x in 5 min (11:25-11:29 EST 2026-11-08, radio sends stalled 15 s).
+#define HAS_BLE 0
 #endif
 #include <SPI.h>
 #include <RH_RF95.h>
@@ -59,12 +62,24 @@ static const uint32_t SOS_MIN_GAP_MS = 3000;  // ignore double taps / resubmits
 DNSServer dns;
 WebServer web(80);
 static uint32_t lastSos = 0;
-struct SosRec { char id[5]; bool acked; char reply[48]; };
+struct SosRec { char id[5]; bool acked; char reply[48]; uint32_t at, lastSl; };
+// While the phone keeps the "sent" page open it polls /status every 2 s; until the ACK, every SL_REPEAT_MS
+// B1 re-reads the phone RSSI and sends a new SL, so the dashboard search area keeps updating (stops after SL_REPEAT_FOR_MS).
+static const uint32_t SL_REPEAT_MS = 20000, SL_REPEAT_FOR_MS = 600000;
 static SosRec sosLog[8];
 static int sosNext = 0;
 static const int LORA_CS = 10, LORA_RST = 11, LORA_INT = 9;
 static const float LORA_FREQ = 915.0;
-RH_RF95 rf95(LORA_CS, LORA_INT);
+// RadioHead normally reads the radio over SPI inside the DIO0 interrupt. The TFT shares that SPI bus, so a packet
+// arriving while loop() draws the screen left the ISR waiting for the bus lock with interrupts off: interrupt
+// watchdog reset (reset reason 5, B2 on the bench at 10:24 EST, right after it forwarded an SP1 packet).
+// B2 only receives, so no interrupt: loop() polls DIO0 (RxDone, high until the IRQ flags are cleared).
+class RF95Polled : public RH_RF95 {
+ public:
+  explicit RF95Polled(uint8_t cs) : RH_RF95(cs, RH_INVALID_PIN) {}
+  void poll() { handleInterrupt(); }
+};
+RF95Polled rf95(LORA_CS);
 static bool loraOk = false;
 
 // ---- demo topology: which neighbour each node accepts from (chain SP1 -> B2 -> B1 -> CP) ----
@@ -115,6 +130,69 @@ static uint32_t cntRx = 0, cntFwd = 0, cntDup = 0, cntDrop = 0, cntHeal = 0;
 static char lastType[10] = "-", lastFrom[8] = "-";
 static int lastRssi = 0;
 static bool screenDirty = true;
+
+// ---- demo switches ----
+static bool relayOff = false;    // D1 (or CMD off): this relay plays dead, no radio TX at all -> self-heal demo
+static bool loraOnly = false;    // B2, CMD lora: drop the Pi's bulk link (weak signal); alerts stay on LoRa
+
+// ---- battery (MAX17048 fuel gauge on the Feather, I2C 0x36) ----
+#include <Wire.h>
+static bool gaugeOk = false;
+static int batPct = -1;
+static float batV = 0;
+
+// ---- relay placement prompt: the relay in the operator's hand watches the beacon RSSI of the last placed
+// node (B1 watches BASE, B2 watches B1). Weak for a few samples -> PLACE ("drop me here, press D2"),
+// repeated until D2. Neither too close (wasted range) nor too far (12 Mbps bulk needs about -85 dBm).
+static int placeTh = -70;                       // dBm, EMA of the upstream beacon; CMD th changes it live
+static const int PLACE_HYST = 4, PLACE_N = 3;   // stop prompting above th + 4; prompt after 3 weak samples
+static const uint32_t PLACE_REPEAT_MS = 15000;
+static bool placed = false;                     // D2 pressed on this relay
+static float upEma = 0;
+static int weakN = 0;
+static uint32_t lastPlaceMsg = 0, upLastSeen = 0;
+static bool prompting = false, upLost = false;
+static int upCode = 0;                          // the node behind this relay that placeLoop watches
+
+// ---- relay self-restart: B2 is the spotter's only gateway (LoRa + RESCUE-LINK), so a relay whose radio stops
+// completing ESP-NOW sends (beacon every 2 s) or whose loop stops for 10 s restarts itself (about 3 s) instead of
+// staying dark until someone presses RESET. Checked from a FreeRTOS timer, so a stuck loop() cannot hide it.
+// D2 "placed", LoRa-only and th survive our own restart (RTC memory, cleared by a power cut).
+static volatile uint32_t lastTxDone = 0, lastLoopAt = 0;
+static const uint32_t TX_STUCK_MS = 30000, LOOP_STUCK_MS = 10000;   // 15 s fired 4x on B2 11:25-11:29 EST (walk, ~55 BLE phones)
+static const uint32_t KEEP_MAGIC = 0xB2EE5AFE;
+RTC_NOINIT_ATTR static uint32_t keepMagic;
+RTC_NOINIT_ATTR static int32_t keepPlaced, keepLora, keepTh, keepWhy;
+static int wdWhy = 0;                           // after our restart: 1 radio stuck, 2 loop stuck (first HB "wd")
+static volatile uint8_t loopStage = 0;         // which part of loop() runs now (first HB "ws" after a restart)
+RTC_NOINIT_ATTR static int32_t keepGap, keepStage;
+static int wdGap = 0, wdStage = 0;
+static void wdRestart(int why) {
+  keepPlaced = placed; keepLora = loraOnly; keepTh = placeTh; keepWhy = why; keepStage = loopStage;
+  keepGap = (int32_t)(millis() - (why == 1 ? lastTxDone : lastLoopAt));
+  keepMagic = KEEP_MAGIC;
+  esp_restart();
+}
+static void wdTick(TimerHandle_t) {
+  uint32_t now = millis();
+  if (relayOff) { lastTxDone = lastLoopAt = now; return; }   // D1: silent on purpose
+  // signed: loop() / the send callback run on other tasks and may stamp a millisecond later than `now`
+  // (unsigned now - later = 4e9 -> a false "stuck" restart, seen once on the bench at 10:12 EST)
+  if ((int32_t)(now - lastLoopAt) > (int32_t)LOOP_STUCK_MS) wdRestart(2);
+  else if ((int32_t)(now - lastTxDone) > (int32_t)TX_STUCK_MS) wdRestart(1);
+}
+static const char* const NODE_NAME[] = {"BASE", "B1", "B2", "Pi"};   // by code (bulk-link codes)
+
+// ---- SOS phone localization: after an SOS, B1 sends SL with the phone's MAC tail; every other node listens
+// for that phone's Wi-Fi frames (promiscuous, data frames, transmitter address) for SNIFF_MS and answers SLR.
+// Only after an SOS: no listening otherwise.
+static const uint32_t SNIFF_MS = 5000;
+static volatile uint8_t sniffMac[3];
+static volatile int32_t sniffSum = 0;
+static volatile int sniffN = 0;
+static uint32_t sniffUntil = 0;
+static char sniffPm[7] = "";
+static char localSeen[5] = "";                  // id of the last SL/PLACE acted on (both copies of a resend)
 
 // ---- BLE phone listener: unique addresses above an RSSI threshold, strongest RSSI, Apple count ----
 // Spec says RSSI > -90; a crowded venue saturates that, so -75 (~a few metres) by default.
@@ -210,6 +288,7 @@ static bool acceptFrom(const char* hop, bool downlink) {
 }
 
 static void sendRaw(const char* s, int len) {
+  if (relayOff) return;                         // switched off: silent (receives, never transmits)
   esp_now_send(BROADCAST, (const uint8_t*)s, len);
 }
 
@@ -244,6 +323,23 @@ static uint32_t bulkRx = 0, bulkFwd = 0, bulkDrop = 0, bulkFail = 0, bulkUdp = 0
 static int bulkVia = -1;
 static AsyncUDP linkUdp;   // packets handled in the network task: a slow loop() (screen redraw) must not
                            // let lwIP's tiny UDP receive mailbox overflow
+static volatile uint32_t piIp4 = 0;        // the spotter Pi on RESCUE-LINK (source address of its bulk packets)
+static const uint16_t PI_SAY_PORT = 5006;  // the Pi's prompt listener: SAY (speaker) and MODE
+static void toPi(JsonDocument& d) {        // B2 only: one JSON datagram to the Pi
+  if (!HAS_LINK_AP || relayOff) return;
+  char buf[160];
+  size_t n = serializeJson(d, buf, sizeof(buf));
+  uint32_t ip = piIp4 ? (uint32_t)piIp4 : (uint32_t)IPAddress(192, 168, 4, 2);
+  linkUdp.writeTo((const uint8_t*)buf, n, IPAddress(ip), PI_SAY_PORT);
+  Serial.printf("# to pi %s\n", buf);
+}
+static void sayToPi(const char* k, const char* m) {
+  JsonDocument d;
+  d["t"] = "SAY";
+  d["k"] = k;
+  d["m"] = m;
+  toPi(d);
+}
 
 static int myCode() {
   if (isCP) return 0;
@@ -273,6 +369,7 @@ static void bulkOnRecv(const uint8_t* mac, const uint8_t* data, int len, int rss
 static void bulkOnSent(const esp_now_send_info_t* info, esp_now_send_status_t st) {
   if (st != ESP_NOW_SEND_SUCCESS) bulkFail++;
   bulkInflight = false;
+  lastTxDone = millis();                                     // the radio finished a send (self-restart check)
 }
 
 static int codeOf(const char* name) {
@@ -328,6 +425,13 @@ static void bulkHandle(uint8_t* d, int len) {
 
 static void bulkLoop() {
   uint32_t now = millis();
+  if (relayOff) {                                            // dead relay: no beacon, no forwarding
+    portENTER_CRITICAL(&bulkMux);
+    binTail = binHead;
+    portEXIT_CRITICAL(&bulkMux);
+    boutTail = boutHead;
+    return;
+  }
   if (now - lastBeacon >= BEACON_MS) {                       // beacon: "I am code N" (BASE included)
     lastBeacon = now;
     uint8_t b[3] = {BULK_MAGIC, 0, (uint8_t)myCode()};
@@ -478,10 +582,10 @@ static String cleanText(const String& in, size_t maxBytes) {
 
 // RSSI (dBm) at this AP of the phone that is posting the SOS, from the station list; 0 = unknown.
 // One phone connected: it is that one. Several: match the HTTP client's IP through the DHCP leases.
-static int sosPhoneRssi() {
+static int sosPhoneRssi(uint8_t* macOut) {
   wifi_sta_list_t sl;
   if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK || sl.num <= 0) return 0;
-  if (sl.num == 1) return sl.sta[0].rssi;
+  if (sl.num == 1) { memcpy(macOut, sl.sta[0].mac, 6); return sl.sta[0].rssi; }
   esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
   if (!nif) return 0;
   int n = min((int)sl.num, (int)ESP_WIFI_MAX_CONN_NUM);
@@ -490,8 +594,19 @@ static int sosPhoneRssi() {
   if (esp_netif_dhcps_get_clients_by_mac(nif, n, pairs) != ESP_OK) return 0;
   uint32_t ip = (uint32_t)web.client().remoteIP();
   for (int i = 0; i < n; i++)
-    if (pairs[i].ip.addr == ip) return sl.sta[i].rssi;
+    if (pairs[i].ip.addr == ip) { memcpy(macOut, sl.sta[i].mac, 6); return sl.sta[i].rssi; }
   return 0;
+}
+
+static void sendSl(const uint8_t* pmac, int sr) {
+  char pm[7];
+  snprintf(pm, sizeof(pm), "%02x%02x%02x", pmac[3], pmac[4], pmac[5]);
+  JsonDocument sl;
+  sl["t"] = "SL";
+  sl["z"] = NODE_ID;
+  sl["pm"] = pm;
+  sl["r"] = sr;
+  originate(sl, true);
 }
 
 static void handleSos() {
@@ -526,14 +641,17 @@ static void handleSos() {
   doc["msg"] = msg;
   if (people) doc["p"] = people;
   if (inj >= 0) doc["inj"] = inj;  // 0 none, 1 hurt but mobile, 2 trapped
-  int sr = sosPhoneRssi();          // how close the phone is to this relay (distance ring on the floor plan)
+  uint8_t pmac[6] = {0};
+  int sr = sosPhoneRssi(pmac);      // how close the phone is to this relay (distance ring on the floor plan)
   // only if it fits: originate adds id/src/ttl/rt (~40 B) and a relay hop adds rt + q (~15 B), limit MSG_MAX
   if (sr < 0 && measureJson(doc) + 70 <= (size_t)MSG_MAX) doc["sr"] = sr;
   originate(doc, true);
+  if (sr < 0) sendSl(pmac, sr);     // ask BASE and B2 to listen for this phone: trilateration on the dashboard
   SosRec& rec = sosLog[sosNext];
   sosNext = (sosNext + 1) % 8;
   strncpy(rec.id, doc["id"] | "", 4); rec.id[4] = 0;
   rec.acked = false; rec.reply[0] = 0;
+  rec.at = rec.lastSl = now;
   strncpy(lastType, "SOS", sizeof(lastType) - 1);
   strncpy(lastFrom, "web", sizeof(lastFrom) - 1);
   screenDirty = true;
@@ -546,6 +664,13 @@ static void handleSos() {
 // GET /status?id=xxxx -> {"ack":true,"reply":"..."} once the rescuers acknowledged
 static void handleStatus() {
   SosRec* r = findSos(web.arg("id").c_str());
+  uint32_t now = millis();
+  if (r && !r->acked && now - r->at < SL_REPEAT_FOR_MS && now - r->lastSl >= SL_REPEAT_MS) {
+    r->lastSl = now;
+    uint8_t pmac[6] = {0};
+    int sr = sosPhoneRssi(pmac);
+    if (sr < 0) { sendSl(pmac, sr); Serial.printf("# sos %s: phone %d dBm, SL repeat\n", r->id, sr); }
+  }
   JsonDocument d;
   d["ack"] = r && r->acked;
   if (r && r->acked) d["reply"] = r->reply;
@@ -566,6 +691,137 @@ static void portalBegin() {
   Serial.printf("# portal %s on %s\n", PORTAL_SSID, WiFi.softAPIP().toString().c_str());
 }
 
+// ---- SOS phone localization (promiscuous listen, only after an SOS) ----
+static void sniffCb(void* buf, wifi_promiscuous_pkt_type_t type) {   // Wi-Fi task: keep it tiny
+  if (type != WIFI_PKT_DATA) return;
+  const wifi_promiscuous_pkt_t* p = (const wifi_promiscuous_pkt_t*)buf;
+  if (p->rx_ctrl.sig_len < 24) return;
+  const uint8_t* h = p->payload;                                      // 802.11 header: addr2 (transmitter) at 10
+  if (h[13] != sniffMac[0] || h[14] != sniffMac[1] || h[15] != sniffMac[2]) return;
+  sniffSum += p->rx_ctrl.rssi;
+  sniffN++;
+}
+
+static void sniffStart(const char* pm) {
+  if (strlen(pm) != 6 || sniffUntil) return;
+  for (int i = 0; i < 3; i++) {
+    char b[3] = {pm[2 * i], pm[2 * i + 1], 0};
+    sniffMac[i] = (uint8_t)strtoul(b, nullptr, 16);
+  }
+  strncpy(sniffPm, pm, 6); sniffPm[6] = 0;
+  sniffSum = 0; sniffN = 0;
+  wifi_promiscuous_filter_t f = {.filter_mask = WIFI_PROMIS_FILTER_MASK_DATA};
+  esp_wifi_set_promiscuous_filter(&f);
+  esp_wifi_set_promiscuous_rx_cb(sniffCb);
+  esp_wifi_set_promiscuous(true);
+  sniffUntil = millis() + SNIFF_MS;
+  if (!sniffUntil) sniffUntil = 1;
+  Serial.printf("# sniff %s for %lu ms\n", sniffPm, (unsigned long)SNIFF_MS);
+}
+
+static void sniffLoop(uint32_t now) {
+  if (!sniffUntil || (int32_t)(now - sniffUntil) < 0) return;
+  esp_wifi_set_promiscuous(false);
+  sniffUntil = 0;
+  int n = sniffN;
+  JsonDocument r;
+  r["t"] = "SLR";
+  r["z"] = NODE_ID;
+  r["pm"] = sniffPm;
+  r["n"] = n;
+  if (n > 0) r["r"] = (int)lround((double)sniffSum / n);
+  originate(r, true);
+  Serial.printf("# sniff %s done: %d frames\n", sniffPm, n);
+}
+
+// B2 (next to the Pi): speak the placement prompt of a relay in the operator's hand
+static void placeSay(const char* z, const char* up, bool lost) {
+  char k[8], m[64];
+  snprintf(k, sizeof(k), "%s%c", lost ? "lost" : "place", z[0] ? z[strlen(z) - 1] : '?');
+  if (lost) snprintf(m, sizeof(m), "Relay %s lost %s. Step back.", z, up);
+  else snprintf(m, sizeof(m), "Place relay %s here, then press D2.", z);
+  sayToPi(k, m);
+}
+
+// Relay in the operator's hand (not yet D2): watch the beacon RSSI of the node behind it (B1: BASE, B2: B1).
+// Weak for PLACE_N beacons -> PLACE every 15 s until D2; back above th + hysteresis -> stop. Upstream gone -> lost.
+static void placeLoop(uint32_t now) {
+  int mine = myCode();
+  if (isCP || mine < 1 || mine >= NB_MAX || relayOff) return;
+  static uint32_t lastSample = 0, lastSeenUsed[NB_MAX] = {0};
+  static float ema[NB_MAX] = {0};
+  static int strongN = 0;
+  if (now - lastSample < 1000) return;
+  lastSample = now;
+  // the link behind this relay = the strongest live node closer to BASE (B1 down -> B2 watches BASE: heal)
+  int best = -1;
+  bool fresh = false, everHeard = false;
+  for (int c = 0; c < mine; c++) {
+    uint32_t seenAt = nb[c].seen;
+    if (!seenAt) continue;
+    everHeard = true;
+    if (seenAt != lastSeenUsed[c]) {
+      lastSeenUsed[c] = seenAt;
+      int r = nb[c].rssi;
+      ema[c] = ema[c] == 0 ? r : 0.6f * ema[c] + 0.4f * r;
+      if (c == upCode) fresh = true;
+    }
+    if (now - seenAt < NB_ALIVE_MS && (best < 0 || ema[c] > ema[best])) best = c;
+  }
+  if (!everHeard) return;                                    // nothing behind us is on yet
+  if (best >= 0) {
+    if (best != upCode) fresh = true;
+    upCode = best;
+    upEma = ema[best];
+  }
+  if (placed) {                                              // brought back next to it: ready for a new run
+    if (fresh) strongN = upEma > -40 ? strongN + 1 : 0;
+    if (strongN >= 5) { placed = false; strongN = 0; screenDirty = true; Serial.println("# placement reset"); }
+    return;
+  }
+  if (best >= 0) {
+    if (upLost) { upLost = false; prompting = false; weakN = 0; screenDirty = true; }
+    if (fresh) weakN = upEma < placeTh ? weakN + 1 : 0;
+    if (prompting && upEma > placeTh + PLACE_HYST) { prompting = false; screenDirty = true; }   // walked back
+    if (!prompting && weakN >= PLACE_N) { prompting = true; lastPlaceMsg = now - PLACE_REPEAT_MS; }
+  } else if (!upLost) {                                      // no live node behind us at all
+    upLost = prompting = true;
+    lastPlaceMsg = now - PLACE_REPEAT_MS;
+  }
+  if (prompting && now - lastPlaceMsg >= PLACE_REPEAT_MS) {
+    lastPlaceMsg = now;
+    JsonDocument p;
+    p["t"] = "PLACE";
+    p["z"] = NODE_ID;
+    p["up"] = NODE_NAME[upCode];
+    p["r"] = (int)lround(upEma);
+    if (upLost) p["lost"] = 1;
+    originate(p, true);
+    if (HAS_LINK_AP) placeSay(NODE_ID, NODE_NAME[upCode], upLost);
+    Serial.printf("# place prompt up %s %d dBm%s\n", NODE_NAME[upCode], (int)lround(upEma), upLost ? " LOST" : "");
+    screenDirty = true;
+  }
+}
+
+// CMD {"to":<this node>,"c":...} from the dashboard (BASE serial -> down the chain)
+static void runCmd(const char* c, int v) {
+  if (strcmp(c, "off") == 0) relayOff = true;
+  else if (strcmp(c, "on") == 0) relayOff = false;
+  else if (strcmp(c, "lora") == 0 && HAS_LINK_AP) {
+    loraOnly = true;
+    JsonDocument d; d["t"] = "MODE"; d["lo"] = 1; toPi(d);
+    sayToPi("lora", "Weak signal mode. LoRa only.");
+  } else if (strcmp(c, "bulk") == 0 && HAS_LINK_AP) {
+    loraOnly = false;
+    JsonDocument d; d["t"] = "MODE"; d["lo"] = 0; toPi(d);
+    sayToPi("bulk", "Full link restored.");
+  } else if (strcmp(c, "th") == 0 && v < -5 && v > -100) placeTh = v;   // live tuning / bench test
+  else { Serial.printf("# unknown cmd %s\n", c); return; }
+  Serial.printf("# cmd %s ok\n", c);
+  lastHeartbeat = millis() - HEARTBEAT_MS;      // report the new state right away
+  screenDirty = true;
+}
+
 static void handlePacket(const Packet& pk) {
   JsonDocument doc;
   if (deserializeJson(doc, pk.data, pk.len)) { cntDrop++; return; }
@@ -576,10 +832,29 @@ static void handlePacket(const Packet& pk) {
   JsonArray rt = doc["rt"].as<JsonArray>();
   const char* hop = (rt && rt.size() > 0) ? (const char*)(rt[rt.size() - 1] | "?") : (doc["src"] | "?");
   if (strcmp(hop, NODE_ID) == 0 || strcmp(doc["src"] | "", NODE_ID) == 0) return;  // our own echo
-  bool isAck = strcmp(doc["t"] | "", "ACK") == 0;
-  if (!acceptFrom(hop, isAck)) return;  // demo topology filter (silent)
+  const char* t = doc["t"] | "";
+  // local actions before the topology filter: B1's SL reaches B2 and BASE directly; a PLACE or MARK from the
+  // relay in the operator's hand reaches B2, which is next to the Pi's speaker
+  if (strcmp(id, localSeen) != 0) {
+    bool act = true;
+    if (strcmp(t, "SL") == 0 && !HAS_PORTAL) sniffStart(doc["pm"] | "");
+    else if (strcmp(t, "PLACE") == 0 && HAS_LINK_AP)
+      placeSay(doc["z"] | "?", doc["up"] | "?", (doc["lost"] | 0) != 0);
+    else if (strcmp(t, "MARK") == 0 && HAS_LINK_AP) {
+      char m[40], k[8];
+      const char* z = doc["z"] | "?";
+      snprintf(m, sizeof(m), "Relay %s placed.", z);
+      snprintf(k, sizeof(k), "mark%c", z[0] ? z[strlen(z) - 1] : '?');
+      sayToPi(k, m);
+    } else act = false;
+    if (act) { strncpy(localSeen, id, 4); localSeen[4] = 0; }
+  }
+  bool isAck = strcmp(t, "ACK") == 0;
+  bool isDown = isAck || strcmp(t, "CMD") == 0;     // dashboard -> relays
+  if (!acceptFrom(hop, isDown)) return;  // demo topology filter (silent)
   if (alreadySeen(id)) { cntDup++; return; }
   remember(id);
+  if (strcmp(t, "CMD") == 0 && strcmp(doc["to"] | "", NODE_ID) == 0) { runCmd(doc["c"] | "", doc["v"] | 0); return; }
 
   cntRx++;
   strncpy(lastType, doc["t"] | "?", sizeof(lastType) - 1);
@@ -622,16 +897,45 @@ static void drawScreen() {
   tft.fillScreen(ST77XX_BLACK);
   tft.setCursor(4, 4);
   tft.setTextSize(3);
-  tft.setTextColor(isCP ? ST77XX_YELLOW : ST77XX_GREEN);
+  tft.setTextColor(relayOff ? ST77XX_RED : (isCP ? ST77XX_YELLOW : ST77XX_GREEN));
   tft.print(NODE_ID);
   tft.setTextSize(2);
-  tft.setTextColor(demoTopology ? ST77XX_CYAN : ST77XX_MAGENTA);
-  tft.print(demoTopology ? "  chain" : "  open");
+  if (relayOff) { tft.setTextColor(ST77XX_RED); tft.print("  OFF"); }
+  else if (loraOnly) { tft.setTextColor(ST77XX_ORANGE); tft.print("  LR-only"); }
+  else { tft.setTextColor(demoTopology ? ST77XX_CYAN : ST77XX_MAGENTA); tft.print(demoTopology ? "  chain" : "  open"); }
+  if (gaugeOk && batPct >= 0) {
+    tft.setCursor(188, 8);
+    tft.setTextColor(batPct < 20 ? ST77XX_RED : ST77XX_WHITE);
+    tft.printf("%d%%", batPct);
+  }
+  if (relayOff) {                                  // the self-heal demo: make it obvious from across the room
+    tft.setTextSize(3);
+    tft.setTextColor(ST77XX_RED);
+    tft.setCursor(4, 48);
+    tft.print("RELAY OFF");
+    tft.setTextSize(2);
+    tft.setTextColor(ST77XX_WHITE);
+    tft.setCursor(4, 90);
+    tft.print("hold D1: back on");
+    screenDirty = false;
+    return;
+  }
   tft.setTextColor(ST77XX_WHITE);
-  tft.setCursor(4, 40);
-  tft.printf("rx %lu fwd %lu", (unsigned long)cntRx, (unsigned long)cntFwd);
-  tft.setCursor(4, 62);
-  tft.printf("dup %lu drop %lu", (unsigned long)cntDup, (unsigned long)cntDrop);
+  if (prompting && !placed) {                      // relay in hand: drop it here
+    tft.setTextSize(3);
+    tft.setTextColor(ST77XX_MAGENTA);
+    tft.setCursor(4, 36);
+    tft.print(upLost ? "STEP BACK" : "DROP HERE");
+    tft.setTextSize(2);
+    tft.setCursor(4, 66);
+    tft.printf(upLost ? "lost %s" : "D2  %s %d dBm", NODE_NAME[upCode], (int)lround(upEma));
+    tft.setTextColor(ST77XX_WHITE);
+  } else {
+    tft.setCursor(4, 40);
+    tft.printf("rx %lu fwd %lu", (unsigned long)cntRx, (unsigned long)cntFwd);
+    tft.setCursor(4, 62);
+    tft.printf("dup %lu drop %lu", (unsigned long)cntDup, (unsigned long)cntDrop);
+  }
   tft.setCursor(4, 90);
   tft.printf("%s<%s", lastType, lastFrom);
   tft.setCursor(4, 112);
@@ -670,6 +974,9 @@ void setup() {
   delay(10);
   tft.init(135, 240);
   tft.setRotation(3);
+  Wire.begin();                                   // MAX17048 battery gauge (powered by TFT_I2C_POWER)
+  Wire.beginTransmission(0x36);
+  gaugeOk = Wire.endTransmission() == 0;
 
   pinMode(0, INPUT_PULLUP);    // D0: active low
   pinMode(1, INPUT_PULLDOWN);  // D1: active high
@@ -691,7 +998,8 @@ void setup() {
     tft.setCursor(4, 4);
     tft.setTextSize(2);
     tft.print("ESP-NOW init failed");
-    while (true) delay(1000);
+    delay(3000);
+    ESP.restart();             // was: halt forever (a relay must never stay dark until someone presses RESET)
   }
   esp_now_register_recv_cb(onRecv);
   esp_now_register_send_cb(bulkOnSent);
@@ -707,6 +1015,7 @@ void setup() {
     pinMode(LORA_RST, OUTPUT);
     digitalWrite(LORA_RST, LOW);  delay(10);
     digitalWrite(LORA_RST, HIGH); delay(10);
+    pinMode(LORA_INT, INPUT);    // DIO0, polled from loop() (no interrupt, see RF95Polled)
     loraOk = rf95.init() && rf95.setFrequency(LORA_FREQ);
     Serial.printf("# lora %s\n", loraOk ? "ok" : "FAILED");
   }
@@ -726,6 +1035,8 @@ void setup() {
       int len = pkt.length();
       const uint8_t* d = pkt.data();
       if (len < 10 || len > MAX_LEN || d[0] != BULK_MAGIC || d[1] != 1) return;
+      piIp4 = (uint32_t)pkt.remoteIP();                      // where SAY / MODE go back to
+      if (loraOnly || relayOff) { bulkDrop++; return; }      // weak-signal mode: alerts only (LoRa)
       bulkUdp++;
       portENTER_CRITICAL(&bulkMux);
       int next = (binHead + 1) % BULK_Q;
@@ -745,6 +1056,20 @@ void setup() {
   drawScreen();
   // '#' = debug line, ignored by the dashboard; the board hub learns the node name from it
   Serial.printf("# {\"boot\":\"%s\",\"mac\":\"%s\"}\n", NODE_ID, WiFi.macAddress().c_str());
+  Serial.printf("# reset reason %d\n", (int)esp_reset_reason());
+  if (esp_reset_reason() == ESP_RST_SW && keepMagic == KEEP_MAGIC) {   // our own self-restart: carry on
+    placed = keepPlaced; loraOnly = keepLora; placeTh = keepTh; wdWhy = keepWhy; wdGap = keepGap; wdStage = keepStage;
+    Serial.printf("# self-restart (%s stuck %d ms, loop stage %d): placed %d lora-only %d th %d\n",
+                  wdWhy == 1 ? "radio" : "loop", wdGap, wdStage, (int)placed, (int)loraOnly, placeTh);
+  }
+  keepMagic = 0;
+  if (!isCP) {
+    enableLoopWDT();   // relay: a loop stuck > 5 s reboots it (about 2 s) instead of hanging in the field
+    Serial.printf("# loop wdt %s\n", esp_task_wdt_status(NULL) == ESP_OK ? "armed" : "NOT armed");
+    lastTxDone = lastLoopAt = millis();
+    TimerHandle_t wd = xTimerCreate("wd", pdMS_TO_TICKS(1000), pdTRUE, nullptr, wdTick);
+    if (wd) xTimerStart(wd, 0);
+  }
 }
 
 // BASE: the dashboard writes {"t":"ACK","ref":"<SOS id>","msg":"..."} lines to serial;
@@ -762,6 +1087,16 @@ static void readSerialCommands() {
     if (n == 0) continue;
     JsonDocument cmd;
     if (deserializeJson(cmd, line, n)) { Serial.println("# bad command (not JSON)"); continue; }
+    if (strcmp(cmd["t"] | "", "CMD") == 0 && (cmd["to"] | "")[0] && (cmd["c"] | "")[0]) {
+      JsonDocument o;                            // {"t":"CMD","to":"B2","c":"lora"}: down the chain like an ACK
+      o["t"] = "CMD";
+      o["to"] = cmd["to"] | "";
+      o["c"] = cmd["c"] | "";
+      if (cmd["v"].is<int>()) o["v"] = cmd["v"].as<int>();
+      originate(o, true, true);
+      Serial.printf("# cmd sent to=%s c=%s\n", (const char*)(cmd["to"] | ""), (const char*)(cmd["c"] | ""));
+      continue;
+    }
     if (strcmp(cmd["t"] | "", "ACK") != 0 || !(cmd["ref"] | "")[0]) { Serial.println("# ignored command"); continue; }
     JsonDocument ack;
     ack["t"] = "ACK";
@@ -775,13 +1110,17 @@ static void readSerialCommands() {
 }
 
 void loop() {
+  lastLoopAt = millis();                         // self-restart check (wdTick)
+  loopStage = 1;
   if (isCP) readSerialCommands();
   bulkLoop();
+  loopStage = 2;
   if (HAS_PORTAL) {
     dns.processNextRequest();
     web.handleClient();
   }
   // 1. drain received packets
+  loopStage = 3;
   while (true) {
     Packet pk;
     bool have = false;
@@ -797,6 +1136,8 @@ void loop() {
   }
 
   // 1b. LoRa packets from the spotter go through the same relay logic
+  loopStage = 4;
+  if (loraOk && digitalRead(LORA_INT) == HIGH) rf95.poll();   // what the DIO0 interrupt used to do
   if (loraOk && rf95.available()) {
     Packet pk;
     uint8_t len = MAX_LEN;
@@ -812,6 +1153,7 @@ void loop() {
   uint32_t now = millis();
 
   // 2b. BLE: scan continuously in 5 s bursts, report a PHONE message every 20 s
+  loopStage = 5;
   if (bleScan) {
     if (!bleScan->isScanning()) {
       bleScan->clearResults();
@@ -847,12 +1189,45 @@ void loop() {
   }
 
   // 3. heartbeat
+  loopStage = 6;
   if (now - lastHeartbeat >= HEARTBEAT_MS) {  // BASE: printed to serial only (originate)
     lastHeartbeat = now;
     JsonDocument hb;
     hb["t"] = "HB";
+    static bool firstHb = true;                              // first HB after boot: why we booted
+    if (firstHb) {                                           // rr: 1 power-on or RESET key, 3 sw, 4 panic, 6/7 wdt, 9 brownout
+      hb["rr"] = (int)esp_reset_reason();
+      if (wdWhy) { hb["wd"] = wdWhy; hb["wg"] = wdGap; hb["ws"] = wdStage; }   // self-restart: why, ms, loop stage
+      firstHb = false;
+    }
+    if (gaugeOk && batPct >= 0) { hb["bt"] = batPct; hb["bv"] = serialized(String(batV, 2)); }
+    if (loraOnly) hb["lo"] = 1;
     originate(hb);
   }
+
+  // 3b. battery gauge, every 10 s
+  loopStage = 7;
+  static uint32_t lastGauge = 0;
+  if (gaugeOk && (now - lastGauge >= 10000 || lastGauge == 0)) {
+    lastGauge = now;
+    Wire.beginTransmission(0x36);
+    Wire.write(0x02);                                        // VCELL (2 B, 78.125 uV/LSB), then SOC (2 B, 1/256 %)
+    if (Wire.endTransmission(false) == 0 && Wire.requestFrom((uint16_t)0x36, (size_t)4, true) == 4) {
+      uint16_t vc = Wire.read() << 8; vc |= Wire.read();
+      uint8_t sh = Wire.read(), sl = Wire.read();
+      int pct = min(100, sh + (sl >= 128 ? 1 : 0));
+      batV = vc * 78.125e-6f;
+      if (pct != batPct) screenDirty = true;
+      batPct = pct;
+    }
+  }
+
+  // 3c. relay placement prompt (relay in the operator's hand) and SOS phone listening
+  loopStage = 8;
+  placeLoop(now);
+  loopStage = 9;
+  sniffLoop(now);
+  loopStage = 10;
 
   // 4. buttons (simple debounce)
   static uint32_t lastPress = 0;
@@ -868,23 +1243,43 @@ void loop() {
       strncpy(lastType, "TEST", sizeof(lastType) - 1);
       strncpy(lastFrom, "me", sizeof(lastFrom) - 1);
       screenDirty = true;
-    } else if (digitalRead(1) == HIGH) {
-      lastPress = now;
-      demoTopology = !demoTopology;
-      screenDirty = true;
     } else if (digitalRead(2) == HIGH) {
       lastPress = now;
+      placed = true;               // this relay is in its spot: stop the placement prompt
+      prompting = upLost = false;
+      weakN = 0;
       JsonDocument m;
       m["t"] = "MARK";
       m["z"] = NODE_ID;
       originate(m, true);          // sent twice (same id): a lost frame gets a second chance
+      if (HAS_LINK_AP) sayToPi("mark2", "Relay B2 placed.");
       strncpy(lastType, "MARKED", sizeof(lastType) - 1);
       strncpy(lastFrom, "me", sizeof(lastFrom) - 1);
       screenDirty = true;
     }
   }
+  // D1: relay off / on (self-heal demo), held 1 s so a finger slipping off D2 next to it cannot switch the relay
+  // off. Ignored on B2: it is the spotter's only gateway, so B2 off cuts the spotter off instead of healing.
+  static uint32_t d1Since = 0;
+  static bool d1Done = false;
+  if (digitalRead(1) == HIGH) {
+    if (!d1Since) d1Since = now | 1;
+    if (!d1Done && now - d1Since >= 1000) {
+      d1Done = true;
+      if (!isCP && !HAS_LINK_AP) {
+        relayOff = !relayOff;
+        Serial.printf("# relay %s (D1)\n", relayOff ? "OFF" : "on");
+        if (!relayOff) lastHeartbeat = now - HEARTBEAT_MS;
+        screenDirty = true;
+      } else Serial.println("# D1 ignored on this node");
+    }
+  } else {
+    d1Since = 0;
+    d1Done = false;
+  }
 
   // 5. screen
+  loopStage = 11;
   if (HAS_PORTAL) {  // show how many phones are on the rescue Wi-Fi
     static int lastSta = -1;
     int sta = WiFi.softAPgetStationNum();

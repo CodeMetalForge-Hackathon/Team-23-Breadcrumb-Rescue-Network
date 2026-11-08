@@ -60,6 +60,18 @@ header button { flex: 0 0 auto; font-size: 14px; padding: 6px 10px; white-space:
 #sound.off { border-color: var(--warn); color: var(--warn); }
 #clock { flex: 0 0 auto; font-size: 25px; line-height: 1; white-space: nowrap; font-weight: 800; font-variant-numeric: tabular-nums; }
 
+#banners:empty { display: none; }
+#banners { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 0; }
+.banner { border-radius: 8px; padding: 8px 16px; font-weight: 800; border-left: 10px solid var(--c); background: var(--cbg); }
+.banner.place { --c: var(--warn); --cbg: var(--bg); font-size: 30px; border: 3px solid var(--warn); border-left-width: 10px; }
+.banner.place.lost { --c: var(--sos); border-color: var(--sos); }
+.banner.lora { --c: var(--info); --cbg: var(--bg); font-size: 20px; border: 2px solid var(--info); border-left-width: 10px; }
+.banner small { font-weight: 600; color: var(--muted); margin-left: 10px; font-size: .8em; }
+.node .batt { font-size: 22px; fill: var(--muted); text-anchor: middle; }
+.node .batt.low { fill: var(--sos); font-weight: 800; }
+#lora-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 14px; color: var(--muted); }
+#lora-toggle { font-size: 14px; padding: 5px 10px; }
+#lora-toggle.active { border-color: var(--info); color: var(--info); }
 main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr);
        grid-template-rows: minmax(0, 1fr) auto; gap: 12px; padding: 12px; }
 section.plan { grid-column: 1; grid-row: 1; }
@@ -203,6 +215,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
   <button id="theme">Light</button>
   <div id="clock">--:--:--</div>
 </header>
+<div id="banners" aria-live="assertive"></div>
 <main>
   <section class="plan">
     <h2>Floor plan <small id="plan-t">waiting for LiDAR</small></h2>
@@ -211,6 +224,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
       <button id="plan-labels" class="active" aria-pressed="true" title="Show or hide small marker labels">Labels</button>
       <button id="plan-raw" class="active" aria-pressed="true" title="Show the raw LiDAR scan and occupancy map">Raw scan</button>
       <button id="plan-signal" class="active" aria-pressed="true" aria-controls="plan" title="Show measured Wi-Fi signal along the walked path">Signal</button>
+      <button id="plan-phones" class="active" aria-pressed="true" aria-controls="plan" title="Show or hide the phone-count halos and labels around the relays">Phone counts</button>
       <span>Mark relay:</span>
       <button data-node="B2" title="Mark B2 at SP1's position">B2 here</button><button data-node="B1" title="Mark B1 at SP1's position">B1 here</button><button data-node="BASE" title="Mark BASE at SP1's position">BASE here</button>
       <button id="plan-pause" aria-pressed="false" title="Pause mapping before setting the rig down on the floor; resume after picking it up at the same spot">Pause map</button>
@@ -245,11 +259,15 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
   </section>
   <section class="side">
     <h2>Relay chain</h2>
-    <svg id="map" viewBox="0 0 1000 180" role="img" aria-label="Relay chain with radio node ids and last heard status"></svg>
+    <svg id="map" viewBox="0 0 1000 200" role="img" aria-label="Relay chain with radio node ids and last heard status"></svg>
     <div class="legend">
       <span><i style="background:var(--ok)"></i>heard &lt; 30 s ago</span>
       <span><i style="background:var(--warn)"></i>&lt; 60 s</span>
       <span><i style="background:var(--off)"></i>silent</span>
+    </div>
+    <div id="lora-row">
+      <button id="lora-toggle" aria-pressed="false" title="Weak signal: B2 stops forwarding the bulk link (images, map, people positions); alerts still go over LoRa">Weak signal: LoRa only</button>
+      <span id="lora-state"></span>
     </div>
     <div id="others"></div>
     <div id="stats"></div>
@@ -275,6 +293,104 @@ function sosRange(sr) {
   return { d, inner: d / 1.74, outer: d * 1.74, sr: Math.round(sr) };
 }
 const sosMetres = (d) => d < 2.95 ? d.toFixed(1) : String(Math.round(d));
+// SOS phone fix from several nodes' readings of the same phone (state.sl).
+// Anchors: marked node positions; BASE is the SLAM origin when never marked (the walk starts there).
+const SOS_FIX = new Map();     // SOS card key -> card text
+function sosAnchors(entry, nodes, hist) {
+  // hist: the same phone's readings from all its SOS so far ({node: [dBm, ...]}); averaged in dB, k = count
+  const out = [];
+  if (!entry || !entry.r || typeof entry.r !== "object") return out;
+  for (const [id, r0] of Object.entries(entry.r)) {
+    const all = hist && Array.isArray(hist[id]) && hist[id].length ? hist[id] : [r0];
+    const r = all.reduce((s, v) => s + v, 0) / all.length;
+    const range = sosRange(r);
+    if (!range) continue;
+    let p = nodes && Object.prototype.hasOwnProperty.call(nodes, id) ? nodes[id] : null;
+    if (!(p && Number.isFinite(p.x) && Number.isFinite(p.y))) p = id === "BASE" ? { x: 0, y: 0 } : null;
+    if (p) out.push({ id, x: p.x, y: p.y, d: range.d, k: all.length });
+  }
+  return out;
+}
+const SOS_ANCHOR_MIN_M = 1.0;
+const SOS_AREA_MIN_M = 3.0;    // search circles are never drawn smaller than this
+function sosSolve(all) {
+  // Anchors closer than 1 m (e.g. B1 marked at the start point = BASE) add no geometry:
+  // keep only the stronger reading of such a pair, so 2 coincident anchors fall back to the single-relay band.
+  const anchors = [];
+  for (const a of [...all].sort((p, q) => p.d - q.d)) {
+    if (!anchors.some((b) => Math.hypot(a.x - b.x, a.y - b.y) < SOS_ANCHOR_MIN_M)) anchors.push(a);
+  }
+  const n = anchors.length;
+  if (n >= 3) {
+    // Weighted centre: each relay pulls by 1/d^2 (d from its RSSI), so the strongest reading dominates and the
+    // centre always lies among the relays. The least-squares grid it replaces put the 08:49 EST live SOS 8 m beyond
+    // B2 (readings B1 -73, B2 -58, BASE -73 dBm); the weighted centre puts it 0.6 m from B2.
+    let sw = 0, x = 0, y = 0;
+    for (const a of anchors) { const w = 1 / (a.d * a.d); sw += w; x += w * a.x; y += w * a.y; }
+    x /= sw; y /= sw;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    // search area radius: how badly the readings disagree with that centre (log rms) on the nearest relay's
+    // distance, 3..10 m; averaging k SOS readings of the same phone shrinks it by sqrt(k).
+    const best = anchors.reduce((s, a) => {
+      const e = Math.log(Math.max(0.3, Math.hypot(x - a.x, y - a.y)) / a.d);
+      return s + e * e;
+    }, 0);
+    const near = Math.min(...anchors.map((a) => Math.hypot(x - a.x, y - a.y)));
+    const k = Math.max(1, Math.min(...anchors.map((a) => a.k || 1)));
+    const raw = Math.max(1, near) * (Math.exp(Math.sqrt(best / n)) - 1) / Math.sqrt(k);
+    const rms = Math.min(10, Math.max(SOS_AREA_MIN_M, raw));
+    return { kind: "fix", n, k, points: [[x, y]], mirror: false, radius: rms, anchors };
+  }
+  if (n === 2) {
+    const [p, q] = anchors, D = Math.hypot(q.x - p.x, q.y - p.y);
+    if (!(D >= SOS_ANCHOR_MIN_M)) return null;
+    const ux = (q.x - p.x) / D, uy = (q.y - p.y) / D;
+    if (D <= p.d + q.d && D >= Math.abs(p.d - q.d)) {
+      const a = (p.d * p.d - q.d * q.d + D * D) / (2 * D), h = Math.sqrt(Math.max(0, p.d * p.d - a * a));
+      const mx = p.x + a * ux, my = p.y + a * uy;
+      return { kind: "two", n, points: [[mx - h * uy, my + h * ux], [mx + h * uy, my - h * ux]], radius: 4, anchors };
+    }
+    // Circles do not meet: the point on the line between them, midway across the gap.
+    const t = D > p.d + q.d ? p.d + (D - p.d - q.d) / 2 : p.d > q.d ? (p.d + D + q.d) / 2 : (D - q.d - p.d) / 2;
+    return { kind: "line", n, points: [[p.x + t * ux, p.y + t * uy]], radius: 5, anchors };
+  }
+  return null;
+}
+function sosFixes(sl, alerts, nodes) {
+  const open = new Map();
+  for (const a of Array.isArray(alerts) ? alerts : []) if (a && a.t === "SOS" && !Number.isFinite(a.acked)) open.set(a.key, a);
+  const hist = new Map();   // phone (pm) -> {node: [dBm of each SOS]}
+  for (const e of Array.isArray(sl) ? sl : []) {
+    if (!e || typeof e !== "object" || !e.pm || !e.r || typeof e.r !== "object") continue;
+    const h = hist.get(e.pm) || {};
+    if (e.h && typeof e.h === "object") {   // server keeps each relay's recent readings of this phone
+      for (const [id, rs] of Object.entries(e.h)) if (Array.isArray(rs))
+        for (const r of rs) if (typeof r === "number" && Number.isFinite(r)) (h[id] = h[id] || []).push(r);
+    } else for (const [id, r] of Object.entries(e.r)) if (typeof r === "number" && Number.isFinite(r)) (h[id] = h[id] || []).push(r);
+    hist.set(e.pm, h);
+  }
+  const out = [];
+  for (const e of Array.isArray(sl) ? sl : []) {
+    if (!e || typeof e !== "object") continue;
+    if (e.sos_key != null && !open.has(e.sos_key)) continue;
+    const fix = sosSolve(sosAnchors(e, nodes, e.pm ? hist.get(e.pm) : null));
+    if (fix) out.push({ ...fix, sos_key: e.sos_key, pm: e.pm });
+  }
+  return out;
+}
+const sosNearest = (f) => (f.anchors && f.anchors[0] ? f.anchors[0].id : "?");   // strongest reading first
+const sosFixLabel = (f) => f.kind === "fix" ? `SOS phone: search this area (${sosMetres(f.radius)} m), nearest relay ${sosNearest(f)}`
+  : f.kind === "two" ? `SOS phone: one of these two areas, nearest relay ${sosNearest(f)}`
+  : `SOS phone: rough area, nearest relay ${sosNearest(f)}`;
+const sosFixCard = (f) => f.kind === "fix"
+  ? `search area on the plan from ${f.n} relays${f.k > 1 ? `, ${f.k} SOS averaged` : ""} (radius ${sosMetres(f.radius)} m), nearest relay ${sosNearest(f)}`
+  : f.kind === "two" ? `2 relays: one of two areas on the plan, nearest relay ${sosNearest(f)}`
+  : `2 relays: rough area on the plan, nearest relay ${sosNearest(f)}`;
+function updateSosFixCards(sl, alerts) {
+  SOS_FIX.clear();
+  const nodes = PLAN.data && PLAN.data.nodes;
+  for (const f of sosFixes(sl, alerts, nodes)) if (f.sos_key != null && !SOS_FIX.has(f.sos_key)) SOS_FIX.set(f.sos_key, sosFixCard(f));
+}
 const sosRangeText = (node, range) => `about ${sosMetres(range.d)} m from ${node} (Wi-Fi signal ${range.sr} dBm)`;
 const INJURY = { 0: "no one hurt", 1: "hurt, can move", 2: "TRAPPED / can't move" };
 const HIGHLIGHT_MS = 3000;
@@ -316,8 +432,10 @@ function buildMap() {
     g.appendChild(svg("text", { class: n.id.length > 3 ? "id long" : "id", x: NX(i), y: NY }, n.id));
     const age = svg("text", { class: "age", x: NX(i), y: NY + 76 }, "never heard");
     g.appendChild(age);
+    const batt = n.id === "SP1" ? null : svg("text", { class: "batt", x: NX(i), y: NY + 104 }, `${n.id} --`);
+    if (batt) g.appendChild(batt);
     map.appendChild(g);
-    nodeEls[n.id] = { g, age, i, until: 0 };
+    nodeEls[n.id] = { g, age, batt, i, until: 0 };
   });
 }
 
@@ -327,6 +445,12 @@ function renderNodes(nodes) {
     const info = nodes[n.id] || {}, e = nodeEls[n.id];
     e.g.setAttribute("class", `node ${info.health || "grey"}${e.until > now ? " hl" : ""}`);
     e.age.textContent = info.age == null ? "never heard" : `heard ${ago(info.age)}`;
+    if (e.batt) {
+      const bt = Number.isFinite(info.bt) ? Math.round(info.bt) : null, bv = Number.isFinite(info.bv) ? info.bv : null;
+      e.batt.textContent = bt == null && bv == null ? `${n.id} --`
+        : `${n.id} ${bt == null ? "--" : `${bt}%`}${bv == null ? "" : ` ${bv.toFixed(2)} V`}`;
+      e.batt.setAttribute("class", `batt${bt != null && bt < 20 ? " low" : ""}`);
+    }
   }
   const others = Object.keys(nodes).filter((id) => !nodeEls[id]);
   $("others").textContent = others.length
@@ -370,9 +494,12 @@ function describe(a) {
         details: [a.p != null ? (a.p >= 4 ? "4 or more people" : `${a.p} ${a.p === 1 ? "person" : "people"}`) : null,
                   a.inj != null ? el("span", a.inj > 0 ? "bad-t" : null, INJURY[a.inj] || `injury ${a.inj}`) : null,
                   a.src === "B1" ? "sent from the rescue Wi-Fi at B1" : null,
+                  SOS_FIX.get(a.key) || null,
                   typeof a.src === "string" && sosRange(a.sr)
                     ? sosRangeText(a.src.length > 24 ? a.src.slice(0, 24) + "…" : a.src, sosRange(a.sr)) : null],
       };
+    case "PLACE":
+      return { main: placeText(a), details: [] };
     case "PERSON":
       return {
         main: `${a.ps === "D" ? "Person on the ground" : "Person detected"}${a.c != null ? ` · ${a.c}%` : ""}`,
@@ -465,7 +592,7 @@ function renderFeed(alerts) {
   for (const a of alerts) {
     live.add(a.key);
     const c = cards.get(a.key);
-    const sig = `${a.handled}|${a.rx}|${a.acked || ""}|${canSend}`;
+    const sig = `${a.handled}|${a.rx}|${a.acked || ""}|${canSend}|${SOS_FIX.get(a.key) || ""}`;
     if (!c || c.sig !== sig) {
       const node = buildCard(a, fresh.includes(a));
       if (c) c.el.replaceWith(node);
@@ -576,6 +703,61 @@ function setTheme(t) {
 $("theme").onclick = () => setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
 try { setTheme(localStorage.getItem("rn-theme") || "dark"); } catch (e) { setTheme("dark"); }
 
+// ---------- PLACE and LoRa-only banners ----------
+const PLACE_S = 30;
+const short = (v) => String(v ?? "?").slice(0, 16);
+function placeText(a) {
+  const z = short(a.z || a.src), up = short(a.up);
+  if (a.lost) return `${z} lost ${up}: step back toward it`;
+  return `Drop ${z} here now, then press D2 (link to ${up}${Number.isFinite(a.r) ? ` ${Math.round(a.r)} dBm` : ""})`;
+}
+// A PLACE banner stays until a MARK from that relay, or 30 s after its last PLACE.
+function placeBanners(alerts, now) {
+  const place = new Map(), mark = new Map();
+  for (const a of Array.isArray(alerts) ? alerts : []) {
+    if (!a || !Number.isFinite(a.rx)) continue;
+    const z = a.z || a.src;
+    if (typeof z !== "string") continue;
+    if (a.t === "PLACE" && (!place.has(z) || place.get(z).rx < a.rx)) place.set(z, a);
+    if (a.t === "MARK" && (!mark.has(z) || mark.get(z) < a.rx)) mark.set(z, a.rx);
+  }
+  return [...place.values()].filter((a) => Number.isFinite(now) && now - a.rx <= PLACE_S && !(mark.get(a.z || a.src) >= a.rx))
+    .sort((p, q) => q.rx - p.rx);
+}
+let MODE = { lora_only: false };
+function renderBanners(s) {
+  const box = $("banners");
+  box.textContent = "";
+  for (const a of placeBanners(s.alerts, s.now)) {
+    box.appendChild(el("div", `banner place${a.lost ? " lost" : ""}`, placeText(a)));
+  }
+  MODE = s.mode && typeof s.mode === "object" ? s.mode : { lora_only: false };
+  const pend = MODE.sent && !MODE.confirmed;
+  if (MODE.lora_only) {
+    const b = el("div", "banner lora", "LoRa only: alerts still arrive; images, map and people positions paused");
+    b.appendChild(el("small", null, MODE.confirmed ? `confirmed by ${short(MODE.to)}` : `pending: waiting for ${short(MODE.to)} to confirm`));
+    box.appendChild(b);
+  }
+  const t = $("lora-toggle");
+  t.classList.toggle("active", !!MODE.lora_only);
+  t.setAttribute("aria-pressed", String(!!MODE.lora_only));
+  t.disabled = !canSend || t.dataset.busy === "1";
+  $("lora-state").textContent = !canSend ? "cannot send from this source"
+    : MODE.lora_only ? (pend ? "on, pending" : "on, confirmed")
+    : MODE.sent ? (pend ? "bulk link restoring, pending" : "bulk link on, confirmed") : "bulk link on";
+}
+$("lora-toggle").onclick = async () => {
+  const t = $("lora-toggle");
+  t.dataset.busy = "1"; t.disabled = true;
+  try {
+    const r = await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: "B2", c: MODE.lora_only ? "bulk" : "lora" }) });
+    if (!r.ok) $("lora-state").textContent = `send failed (HTTP ${r.status})`;
+  } catch (e) { $("lora-state").textContent = "send failed"; }
+  t.dataset.busy = "";
+  refresh();
+};
+
 // ---------- polling ----------
 let lastOk = 0, busy = false, planReady = false;
 function render(s) {
@@ -583,8 +765,9 @@ function render(s) {
   renderLink(s);
   renderNodes(s.nodes);
   renderCounts(s.alerts);
-  renderFeed(s.alerts);
+  renderBanners(s);
   updatePlanAlerts(s);
+  renderFeed(s.alerts);
   const st = s.stats || {};
   $("stats").textContent = `Messages ${st.received ?? 0} · duplicates dropped ${st.duplicates ?? 0} · non-JSON lines ignored ${st.ignored ?? 0}`;
 }
@@ -676,10 +859,12 @@ setInterval(refreshRemote, 300);
 // ---- floor plan: SLAM map, spotter path, relays, people (all in metres, map frame from the dashboard) ----
 const PLAN = { data: null, img: null, imgV: -1, view: null, manualView: null,
                drag: null, dragPos: null, pan: null, labels: true, rawScan: null, signal: true, highlight: null, rows: new Map(),
-               alerts: [], alertClock: null };
+               alerts: [], sl: [], alertClock: null };
 planReady = true;
 function updatePlanAlerts(state, monotonicNow = performance.now()) {
   PLAN.alerts = Array.isArray(state.alerts) ? state.alerts : [];
+  PLAN.sl = Array.isArray(state.sl) ? state.sl : [];
+  updateSosFixCards(PLAN.sl, PLAN.alerts);
   PLAN.alertClock = Number.isFinite(state.now) && Number.isFinite(monotonicNow)
     ? { serverNow: state.now, receivedAt: monotonicNow } : null;
   drawPlan();
@@ -732,6 +917,12 @@ function signalControl() {
   $("plan-signal").classList.toggle("active", PLAN.signal);
 }
 signalControl();
+try { PLAN.phones = localStorage.getItem("rn-plan-phones") !== "off"; } catch (e) { PLAN.phones = true; }
+function phonesControl() {
+  $("plan-phones").setAttribute("aria-pressed", String(PLAN.phones));
+  $("plan-phones").classList.toggle("active", PLAN.phones);
+}
+phonesControl();
 const CHAIN = ["B2", "B1", "BASE"];
 const freshPerson = (person) => Number.isFinite(person.age) && person.age >= 0 && person.age < 15;
 const planWalls = (data) => (Array.isArray(data.walls) ? data.walls : [])
@@ -756,6 +947,9 @@ function planBounds(d) {
   for (const p of d.path) add(p[0], p[1]);
   for (const n of Object.values(d.nodes)) if (n) add(n.x, n.y);
   for (const p of d.persons) if (freshPerson(p)) add(p.x, p.y);
+  for (const f of sosFixes(PLAN.sl, PLAN.alerts, d.nodes)) for (const [x, y] of f.points) {   // keep SOS areas in view
+    const r = f.radius || 0; add(x - r, y - r); add(x + r, y + r);
+  }
   if (!xs.length) add(0, 0);
   let x0 = Math.min(...xs) - 0.3, x1 = Math.max(...xs) + 0.3, y0 = Math.min(...ys) - 0.3, y1 = Math.max(...ys) + 0.3;
   const minSpan = 6;
@@ -842,7 +1036,7 @@ function drawPlan() {
   reserve(d.pose[0], d.pose[1]);
   g.save();
   const phoneLabels = [], sosLabels = [];
-  for (const zone of zones.phones) {
+  for (const zone of PLAN.phones ? zones.phones : []) {
     const p = pos(zone.node), X = sx(p[0]), Y = sy(p[1]), radius = zone.radius_m * k;
     g.fillStyle = "rgba(100,175,255,0.12)"; g.strokeStyle = "rgba(120,185,255,0.45)"; g.lineWidth = 1.5;
     g.beginPath(); g.arc(X, Y, radius, 0, 2 * Math.PI); g.fill(); g.stroke();
@@ -873,6 +1067,21 @@ function drawPlan() {
     }
     zoneOccupied.push({ x: X - 7, y: Y - 13, w: 20, h: 23 });
     sosLabels.push({ x: X, y: Y, lines: [zone.label, ...zone.lines] });
+  }
+  // SOS phone fixes from several relays (state.sl): a point and a search circle, or two candidate spots.
+  for (const f of sosFixes(PLAN.sl, PLAN.alerts, d.nodes)) {
+    for (const [x, y] of f.points) {     // a search area, not a spot: big translucent circle, small centre tick
+      const X = sx(x), Y = sy(y);
+      g.fillStyle = C.bad; g.globalAlpha = 0.16; g.beginPath(); g.arc(X, Y, f.radius * k, 0, 2 * Math.PI); g.fill();
+      g.globalAlpha = 0.9; g.strokeStyle = C.bad; g.lineWidth = 2.5; g.setLineDash([8, 5]); g.stroke(); g.setLineDash([]);
+      g.globalAlpha = 0.8; g.lineWidth = 2; g.beginPath();
+      g.moveTo(X - 5, Y); g.lineTo(X + 5, Y); g.moveTo(X, Y - 5); g.lineTo(X, Y + 5); g.stroke();
+      zoneOccupied.push({ x: X - 7, y: Y - 7, w: 14, h: 14 });
+    }
+    g.globalAlpha = 1;
+    const [x0, y0] = f.points[0];
+    sosLabels.unshift({ x: sx(x0), y: sy(y0), lines: [sosFixLabel(f)] });
+    if (f.mirror) sosLabels.splice(1, 0, { x: sx(f.points[1][0]), y: sy(f.points[1][1]), lines: ["or mirror side"] });
   }
   // SOS descriptions take the available label space before phone counts.
   if (PLAN.labels) for (const label of [...sosLabels, ...phoneLabels]) {
@@ -1063,6 +1272,12 @@ $("plan-labels").addEventListener("click", () => {
 $("plan-raw").addEventListener("click", () => {
   if (!PLAN.data) return;
   PLAN.rawScan = !showRawPlan(PLAN.data);
+  drawPlan();
+});
+$("plan-phones").addEventListener("click", () => {
+  PLAN.phones = !PLAN.phones;
+  try { localStorage.setItem("rn-plan-phones", PLAN.phones ? "on" : "off"); } catch (e) { /* keep the current viewer setting in memory */ }
+  phonesControl();
   drawPlan();
 });
 $("plan-signal").addEventListener("click", () => {

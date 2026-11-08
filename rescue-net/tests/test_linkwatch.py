@@ -29,3 +29,9 @@ def test_failed_rejoin_is_reported():
     for _ in range(3):
         lw.step()
     assert lw.status.startswith("rejoin failed")
+
+
+def test_failed_rejoin_retries_on_the_next_check():
+    lw, t, calls = make([False] * 5, up_ok=False)
+    assert [lw.step() for _ in range(5)] == [False, False, True, True, True]   # no cooldown while B2 is gone
+    assert len(calls) == 3

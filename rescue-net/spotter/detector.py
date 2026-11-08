@@ -155,7 +155,7 @@ class HailoDetector:
         self.picam2.configure(self.picam2.create_preview_configuration(
             main={"size": main_size, "format": "RGB888"},       # BGR byte order: ready for OpenCV
             lores={"size": (w, h), "format": "RGB888"},
-            controls={"FrameRate": 30}))
+            controls={"FrameRate": float(cfg["cam_fps"]) if "cam_fps" in getattr(cfg, "data", cfg) else 30}))
         if "AfMode" in self.picam2.camera_controls:         # Camera Module 3: keep people in focus
             from libcamera import controls
             self.picam2.set_controls({"AfMode": controls.AfModeEnum.Continuous})

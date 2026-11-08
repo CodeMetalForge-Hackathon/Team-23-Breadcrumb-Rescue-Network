@@ -2,7 +2,7 @@
 
 Each frame: the Pi camera's people and the thermal camera's people (spotter.locate.Obs) are paired by bearing
 (same person seen by both = one observation, src "CT"), then matched to the existing tracks by bearing and range.
-A track is confirmed after 3 hits, and dropped after max_age_s without one. Posture is "U", "D" or None
+A track is confirmed after Track.min_hits hits (3; main.py sets track_min_hits), and dropped after max_age_s without one. Posture is "U", "D" or None
 (can't tell): D needs 5 of the last 7 frames to say D ("?" frames never count towards it) and holds while 3 do;
 U needs 4 of 7.
 A thermal-only track inside the RGB camera's view while the RGB camera does see people is a ghost: the thermal
@@ -33,6 +33,21 @@ def dedupe_obs(obs, deg=4.0, m=0.5):
     return out
 
 
+def merge_close(obs, deg=5.0):
+    """Observations within deg of each other in one frame are one person, whatever their ranges: keep the
+    nearer range (someone close to the rig hides anything behind them at that bearing)."""
+    out = []
+    for o in sorted(obs, key=lambda o: (o.r is None, o.r if o.r is not None else 0.0)):
+        k = next((i for i, x in enumerate(out) if abs(angdiff(o.b, x.b)) <= deg), None)
+        if k is None:
+            out.append(o)
+        elif o.src != out[k].src and "CT" not in (o.src, out[k].src):
+            x = out[k]
+            out[k] = x._replace(src="CT", c=max(x.c, o.c), ps=x.ps if o.ps in (None, "?", x.ps) else
+                                o.ps if x.ps in (None, "?") else "?")
+    return out
+
+
 def pair_cameras(cam_obs, th_obs, merge_deg, max_dr=1.0):
     """Pi-camera and thermal observations of the same person (bearings within merge_deg) -> one "CT" obs."""
     pairs = sorted((abs(angdiff(c.b, t.b)), i, j) for i, c in enumerate(cam_obs) for j, t in enumerate(th_obs))
@@ -55,6 +70,7 @@ def pair_cameras(cam_obs, th_obs, merge_deg, max_dr=1.0):
 
 
 class Track:
+    min_hits = 3                       # hits before a track is shown / alerted (config track_min_hits)
     def __init__(self, tid, obs, now):
         self.id, self.first_seen = tid, now
         self.b, self.r, self.rs, self.c, self.det, self.u = obs.b, obs.r, obs.rs, obs.c, obs.det, obs.u
@@ -96,7 +112,7 @@ class Track:
 
     @property
     def confirmed(self):
-        return self.hits >= 3
+        return self.hits >= Track.min_hits
 
 
 class Tracker:
@@ -107,6 +123,7 @@ class Tracker:
         self.dedupe_deg, self.dedupe_s = dedupe_deg, dedupe_s
         self.need_thermal_for_down, self.thermal_seen_s = need_thermal_for_down, thermal_seen_s
         self.min_th_kp = 3
+        self.absorb_deg, self.absorb_s = 5.0, 0.5
         self.lit = False                   # set per frame from the RGB image brightness
         self.sent = deque()                # (time, bearing, down?, track id) of the alerts sent
         self.tracks = []
@@ -129,6 +146,7 @@ class Tracker:
         # reflection (glossy whiteboards and windows mirror long-wave IR); in the dark thermal-only counts
         if self.lit and self.cam_fov:
             obs = [o for o in obs if not (o.src == "T" and abs(angdiff(o.b, self.cam_fov[0])) <= self.cam_fov[1])]
+        obs = merge_close(obs)
         cand = []
         for ti, t in enumerate(self.tracks):
             for oi, o in enumerate(obs):
@@ -147,6 +165,20 @@ class Tracker:
             if oi not in used_o:
                 self.tracks.append(Track(self._new_id(), o, now))
         self.tracks = [t for t in self.tracks if now - t.last_seen <= self.max_age_s]
+        # one person per bearing across frames too: the RGB and thermal detections of someone close to the rig
+        # can arrive in different frames, one LiDAR window on them and one on the wall behind; the nearer
+        # track absorbs a farther one within absorb_deg (both seen in the last absorb_s)
+        drop = set()
+        for a in self.tracks:
+            for b in self.tracks:
+                if (a is not b and id(b) not in drop and a.r is not None and b.r is not None and a.r < b.r
+                        and abs(angdiff(a.b, b.b)) <= self.absorb_deg
+                        and now - a.last_seen <= self.absorb_s and now - b.last_seen <= self.absorb_s):
+                    drop.add(id(b))
+                    a.hits = max(a.hits, b.hits)
+                    if b.last_alert is not None and (a.last_alert is None or b.last_alert > a.last_alert):
+                        a.last_alert, a.alerted_ps = b.last_alert, b.alerted_ps
+        self.tracks = [t for t in self.tracks if id(t) not in drop]
         for t in self.tracks:
             if t.last_seen == now:
                 t.ghost = bool(cam_obs and self.cam_fov and t.src(now) == "T"

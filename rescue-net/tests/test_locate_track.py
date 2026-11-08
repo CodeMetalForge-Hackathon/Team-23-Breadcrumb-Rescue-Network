@@ -412,3 +412,44 @@ def test_lit_scene_drops_thermal_only_in_camera_view_and_far_pairs_split():
     for i in range(4):
         tr2.update([], [ob(9, r=2.6, src="T")], i * 0.1)
     assert [t.src(0.3) for t in tr2.tracks] == ["T"]          # dark: thermal-only counts
+
+
+def test_close_person_one_track_whatever_the_window_hits():
+    tr = Tracker()
+    for i in range(6):                                  # RGB and thermal boxes 2 deg apart: one hits the person,
+        near, far = ob(11, r=0.7), ob(9, r=2.6, src="T")    # the other the wall behind
+        tr.update([near] if i % 2 else [], [far] if i % 2 == 0 else [far], i * 0.1)
+        tr.update([near], [far], i * 0.1 + 0.05)
+    assert len([t for t in tr.tracks if t.last_seen == 0.55]) == 1 and tr.tracks[-1].r == pytest.approx(0.7, abs=0.1)
+
+
+def test_lidar_window_covers_a_close_wide_box():
+    d = det(0.55, 0.0, 0.95, 1.0)                        # someone close, right of centre, 20+ deg wide
+    s = scan_with([(14, 26, 0.7)], wall_m=2.6)
+    assert observe(d, "C", s, cfg()).r == pytest.approx(0.7, abs=0.05)
+
+
+def test_far_track_at_the_same_bearing_is_absorbed_by_the_near_one():
+    tr, sent = Tracker(), []
+    for i in range(8):                                  # thermal (wall, 2.6 m) and RGB (person, 0.9 m) alternate
+        o = ob(9, r=2.6, src="T") if i % 2 else ob(9, r=0.9)
+        tr.update([o] if o.src == "C" else [], [o] if o.src == "T" else [], i * 0.1)
+        sent += tr.due(i * 0.1, cooldown_s=10)
+    assert len(tr.tracks) == 1 and tr.tracks[0].r == pytest.approx(0.9, abs=0.1)
+    assert len(sent) <= 1
+
+
+def test_min_hits_and_max_age_are_settable():
+    from spotter.tracker import Track
+    tr = Tracker(max_age_s=3.0)
+    try:
+        Track.min_hits = 5
+        for i in range(4):
+            tr.update([ob(9, r=2.0)], [], i * 0.2)
+        assert tr.tracks and not tr.tracks[0].confirmed
+        tr.update([ob(9, r=2.0)], [], 0.8)
+        assert tr.tracks[0].confirmed
+        tr.update([], [], 3.5)                       # 2.7 s without a hit: kept at max_age 3.0
+        assert len(tr.tracks) == 1
+    finally:
+        Track.min_hits = 3

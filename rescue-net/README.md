@@ -79,6 +79,9 @@ The map and the people keep flowing at every level.
 
 ## Known limits
 
+- B2 is the spotter's only gateway: only B2 has the LoRa radio and the `RESCUE-LINK` AP, so if B2 fails the spotter is cut off, and B1 or BASE cannot take over.
+- Power: the Pi rebooted several times on a weak supply, so the spotter needs the official Pi PSU or a 27 W USB-C PD power bank. Detection runs at 5 fps and the camera at 10 fps, with Bluetooth off, to keep the load down (spotter CPU about 40%, Pi about 3.1 W, no under-voltage).
+- The Pi 5's onboard Wi-Fi has no monitor mode, so the spotter cannot listen for an SOS phone.
 - The LiDAR is mounted about 3° off level (re-mounted from 6°), and that tilt is not corrected geometrically. Floor or ceiling returns can show up as walls. Scans taken while the rig is tilted more than 10° are rejected.
 - SLAM has no loop closure. Long featureless corridors can make it drift.
 - Relay suggestions come from an uncalibrated radio heuristic, not from measured links.

@@ -14,7 +14,7 @@ from spotter import calib, debugview, fusion, locate
 from spotter.config import DEFAULT_PATH, Config
 from spotter.debounce import Debouncer, RateLimiter
 from spotter.imu import roll_deg
-from spotter.tracker import Tracker
+from spotter.tracker import Track, Tracker
 
 log = logging.getLogger("spotter")
 
@@ -110,6 +110,14 @@ def main():
             if cfg.data.get("link_watch", True):    # B2 rebooting leaves a stale Wi-Fi association
                 from spotter.linkwatch import LinkWatch
                 LinkWatch(con=cfg.data.get("link_con", "RESCUE-LINK")).start()
+    voice = None
+    if not args.mock and cfg.data.get("voice", True):    # spoken prompts from B2 (relay placement), UDP 5006
+        try:
+            from spotter.voice import Voice
+            voice = Voice(port=int(cfg.data.get("voice_port", 5006)), rate_s=float(cfg.data.get("voice_rate_s", 8)),
+                          beep_gpio=cfg.data.get("voice_beep_gpio")).start()
+        except Exception:
+            log.exception("voice prompts off")
     thermal.start()
 
     debouncer = Debouncer(cooldown_s=cfg["cooldown_s"])
@@ -119,11 +127,13 @@ def main():
     recent = deque()                               # (time, person boxes) for the last second
     last_hb = None
     frames, fps, fps_t0 = 0, 0.0, time.monotonic()
+    fps_logged = 0.0
     log.info("spotter %s in zone %s running (%s)", cfg["src"], cfg["zone"], "mock" if args.mock else "camera")
 
     try:
         while True:
             cfg.maybe_reload()
+            loop_t0 = time.monotonic()
             image, dets = detector.detect()
             now = time.monotonic()
             dets = [d for d in dets if d.label == "person" and d.score >= cfg["det_min_score"]]
@@ -148,6 +158,8 @@ def main():
                       for d in (th_dets or ())]
             recorder.step(cfg.data, cam_obs, th_obs, scan, imu_now)
             tracker.merge_deg = cfg["track_merge_deg"]
+            tracker.max_age_s = float(cfg["track_max_age_s"])
+            Track.min_hits = int(cfg["track_min_hits"])
             tracker.cam_fov = (cfg["cam_yaw"], cfg["cam_hfov"] / 2 - 3)
             tracker.need_thermal_for_down = th_det is not None and bool(cfg.data.get("down_needs_thermal", True))
             try:
@@ -196,8 +208,14 @@ def main():
             frames += 1
             if now - fps_t0 >= 2.0:
                 fps, frames, fps_t0 = frames / (now - fps_t0), 0, now
+                if now - fps_logged >= 60:
+                    log.info("loop %.1f fps", fps)
+                    fps_logged = now
             if view:
                 view.update(image, analysis, frame, cfg, fps)
+            det_fps = float(cfg.data.get("det_fps") or 0)
+            if det_fps > 0:                        # power cap: fewer Hailo runs and less CPU
+                time.sleep(max(0.0, 1.0 / det_fps - (time.monotonic() - loop_t0)))
     except (KeyboardInterrupt, BrokenPipeError):
         pass
     finally:

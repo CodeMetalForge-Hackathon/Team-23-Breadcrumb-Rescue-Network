@@ -31,6 +31,19 @@ DEFAULTS = {
     "lidar_win_deg": 3.0, "lidar_min_m": 0.25, "track_merge_deg": 15.0,
     "lidar_body_veto": True,                       # posture: a LiDAR return on the body rules out "down" (rig on a desk)
     "calib_record_s": 0, "calib_tag": "",          # > 0: record that many seconds of calibration data to ~/logs
+    # false-alert guards (2026-11-08): LiDAR range off when the rig tilts; no "down" under down_min_m; "down" only
+    # while the thermal camera sees the person; a cut box needs cut_min_torso_kp torso keypoints for "down";
+    # lit_luma: mean RGB luma above which a thermal-only person inside the RGB view is a reflection
+    "lidar_max_tilt_deg": 10.0, "down_min_m": 1.0, "down_needs_thermal": True, "legs_down": True,
+    "cut_min_torso_kp": 3, "lit_luma": 40,
+    "link_watch": True, "link_con": "RESCUE-LINK",  # re-join B2's AP when B2 stops answering (spotter/linkwatch.py)
+    # spoken / beeped prompts from B2 (spotter/voice.py); voice_beep_gpio: speaker pin for beep patterns, null = none
+    "voice": True, "voice_port": 5006, "voice_rate_s": 8, "voice_beep_gpio": None,
+    # power: det_fps > 0 caps the detection loop (Hailo + CPU), 0 = as fast as the camera; cam_fps = sensor frame
+    # rate (read at start). Posture needs 5 of 7 frames for "down", so at det_fps 3 that takes ~1.7 s.
+    "det_fps": 0, "cam_fps": 30,
+    # tracker: hits before a person is shown / alerted, seconds without a hit before a track is dropped
+    "track_min_hits": 3, "track_max_age_s": 1.5,
 }
 
 
