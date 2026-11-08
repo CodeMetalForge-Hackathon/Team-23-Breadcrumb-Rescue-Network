@@ -67,6 +67,28 @@ def test_cloud_endpoint_and_offline_assets():
     assert b"/static/view3d.js" in client.get("/").data
 
 
+def test_bulk_meta_keypoints_reach_cloud():
+    state = State()
+    kp = [30, 60] * 17
+    state.map.add_meta({"persons": [{"id": 7, "b": 0, "r": 2.0, "ps": "U", "kp": kp}]})
+    person = create_app(state).test_client().get("/api/cloud").get_json()["persons"][0]
+    assert person["kp"] == kp
+    assert person["x"] == 0 and person["y"] == 2
+    assert 0 <= person["age"] < 2
+
+
+def test_map_reset_clears_cloud_via_actual_endpoint(tmp_path):
+    state = synthetic_state()
+    state.map.nodes_file = tmp_path / "nodes.json"
+    client = create_app(state).test_client()
+    before = client.get("/api/cloud").get_json()
+    assert client.post("/api/map/reset").status_code == 200
+    after = client.get("/api/cloud").get_json()
+    assert after["count"] == 0 and after["points"] == ""
+    assert after["v"] != before["v"]
+    assert after["persons"] == [] and after["path"] == []
+
+
 if __name__ == "__main__":
     import threading
 
