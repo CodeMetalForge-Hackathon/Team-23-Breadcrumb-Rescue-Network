@@ -46,6 +46,7 @@ A responder walks into a building that has no GPS, cell service or Wi-Fi. They c
 | Walked path coloured by measured Wi-Fi signal to B2 (good at -67 dBm and above, fair down to -77, poor below) | implemented, deployed 2026-11-08 06:27 EST |
 | Fewer false PERSON alerts: no re-alert for a re-found person (within 15° / 60 s); "down" needs a visible torso, no box under 1.0 m, and thermal confirmation while the thermal camera runs; LiDAR range cross-checked against box-size range and not used when the rig tilts more than 10° | implemented, unit-tested (`tests/test_locate_track.py`) |
 | One map dot per person: a new tracker id takes over the nearby old entry; with a tilted rig the last level range is kept, and a first sighting is placed and flagged "range unsure" | implemented, unit-tested (`tests/test_mapview_tilt.py`) |
+| Dashboard draws a person first seen while the rig was tilted with a dashed outline and "range unsure" | implemented |
 | Phones near a relay (BLE halo) and SOS pins drawn at the marked relays on the floor plan: a zone, not a position | implemented |
 | SOS card says "about N m from B1", from the phone's Wi-Fi signal at B1 (d = 10^((-40 - RSSI)/25) m, a rough model, ±6 dB band drawn on the plan) | implemented, B1 flashed 2026-11-08; live test with an iPhone pending |
 | Room-style plan: wall segments extracted from the SLAM grid (denoised, about 70 ms) | implemented, unit-tested (`tests/test_floorplan.py`) |
