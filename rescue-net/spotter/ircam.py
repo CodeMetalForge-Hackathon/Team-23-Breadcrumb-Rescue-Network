@@ -79,7 +79,7 @@ class IRCamera:
 SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)]
 
 
-def render(cv2, frame, status="", fps=0.0, dets=(), cfg=None):
+def render(cv2, frame, status="", fps=0.0, dets=(), cfg=None, labels=None):
     """False-colour view (inferno: hot = bright yellow), with the people the pose model found on it."""
     if frame is None:
         img = __import__("numpy").full((512, 640, 3), 30, "uint8")
@@ -100,6 +100,8 @@ def render(cv2, frame, status="", fps=0.0, dets=(), cfg=None):
         if cfg is not None:
             from spotter.posture import posture
             label += {"D": " DOWN", "U": " up"}.get(posture(d, cfg, x_scale=w / h), "")
+        if labels and id(d) in labels:                   # track id, bearing, range
+            label += " " + labels[id(d)]
         org = (x0 + 2, max(y0 - 6, 14))
         cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3)
         cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1)

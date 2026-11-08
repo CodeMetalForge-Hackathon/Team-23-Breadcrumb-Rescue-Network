@@ -42,6 +42,7 @@ class DebugView:
         self._lock = threading.Lock()
         self._state = None
         self.extras = {}                # name -> callable(query) returning a BGR image (thermal, lidar)
+        self.labels = {}                # id(detection) -> "#3 12deg 2.4m" from the tracker
         view = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -128,7 +129,8 @@ class DebugView:
             ps = posture(d, cfg)
             dt = "" if p.dt is None else f" dt{p.dt:+.1f}"
             label = f"{d.score:.2f}{dt}" + {"D": " DOWN", "U": " up"}.get(ps, "") + \
-                (" REJECTED" if p.decision == "rejected" else "")
+                (" REJECTED" if p.decision == "rejected" else "") + \
+                (" " + self.labels[id(d)] if id(d) in self.labels else "")
             _text(cv2, img, label, (x0 + 2, max(y0 - 6, 14)), color)
 
         for b in analysis.blobs:

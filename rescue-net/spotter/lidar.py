@@ -37,9 +37,7 @@ class Lidar:
 
     def start(self):
         if not self.port:
-            self.status = "no lidar port"
-            log.warning("lidar: no serial port found")
-            return self
+            log.warning("lidar: no serial port found yet, will keep looking")
         threading.Thread(target=self._run, name="lidar", daemon=True).start()
         return self
 
@@ -51,8 +49,15 @@ class Lidar:
             return self._scan
 
     def _run(self):
+        import os
         import serial
         while not self._stop:
+            if not self.port or not os.path.exists(self.port):     # plugged in late, or re-enumerated
+                self.port = find_port()
+                if not self.port:
+                    self.status = "no lidar port"
+                    time.sleep(2)
+                    continue
             try:
                 with serial.Serial(self.port, self.baud, timeout=1) as ser:
                     ser.dtr = False                       # A-series adapters: DTR low = motor on
@@ -108,8 +113,9 @@ class Lidar:
                 i += 1
 
 
-def render(cv2, scan, size=480, max_m=6.0, status="", hz=0.0):
-    """Top-down plan view: lidar at the centre, 0 deg pointing up, 1 m rings."""
+def render(cv2, scan, size=480, max_m=6.0, status="", hz=0.0, persons=(), fovs=()):
+    """Top-down plan view: lidar at the centre, 0 deg pointing up, 1 m rings.
+    persons: dicts with b (deg), r (m or None), id, ps; fovs: (yaw, hfov, BGR colour) wedges of the cameras."""
     img = np.full((size, size, 3), 18, np.uint8)
     c = size // 2
     px_per_m = (size / 2 - 10) / max_m
@@ -130,6 +136,20 @@ def render(cv2, scan, size=480, max_m=6.0, status="", hz=0.0):
             xx, yy = np.clip(x[ok] + dx, 0, size - 1), np.clip(y[ok] + dy, 0, size - 1)
             img[yy, xx] = (80, 255, 80)
         n = int(ok.sum())
+    for yaw, hfov, color in fovs:                       # camera fields of view
+        for a in (yaw - hfov / 2, yaw + hfov / 2):
+            th = np.radians(a)
+            cv2.line(img, (c, c), (int(c + np.sin(th) * size), int(c - np.cos(th) * size)), color, 1)
+    for p in persons:                                    # tracked people
+        th, color = np.radians(p["b"]), (0, 0, 255) if p.get("ps") == "D" else (0, 220, 255)
+        if p.get("r") is None:                           # bearing only: a ray
+            cv2.line(img, (c, c), (int(c + np.sin(th) * size), int(c - np.cos(th) * size)), color, 2)
+            org = (int(c + np.sin(th) * 0.8 * c), int(c - np.cos(th) * 0.8 * c))
+        else:
+            org = (int(c + np.sin(th) * p["r"] * px_per_m), int(c - np.cos(th) * p["r"] * px_per_m))
+            cv2.circle(img, org, 9, color, 2)
+        label = f"#{p.get('id', '?')} {p['b']:.0f}deg" + ("" if p.get("r") is None else f" {p['r']:.1f}m")
+        cv2.putText(img, label, (org[0] + 11, org[1] + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
     cv2.circle(img, (c, c), 5, (0, 160, 255), -1)
     cv2.line(img, (c, c), (c, c - 18), (0, 160, 255), 2)
     cv2.putText(img, f"LIDAR {status}  {hz:.1f} Hz  {n} pts  range {max_m:.0f} m",

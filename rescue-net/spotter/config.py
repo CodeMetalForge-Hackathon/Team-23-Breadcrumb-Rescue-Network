@@ -19,6 +19,11 @@ DEFAULTS = {
     "down_angle_deg": 55, "down_aspect": 1.3,      # posture: torso this far from vertical (or box this wide) = on the ground
     "bulk_period": 0.25, "bulk_gap": 0.003,        # live view over B2 Wi-Fi: seconds per round, seconds between chunks
     "thermal_detect": True, "thermal_det_every": 2, "thermal_min_score": 0.45,   # pose model on the USB thermal camera
+    # where people are, in the LiDAR frame: camera field of view (deg), yaw (LiDAR angle of the optical axis),
+    # direction (+1: image right = clockwise), LiDAR window around a bearing, and the rig's own returns to ignore
+    "cam_hfov": 66.0, "cam_yaw": 0.0, "cam_dir": 1, "th_hfov": 50.0, "th_yaw": 0.0, "th_dir": 1,
+    "lidar_win_deg": 3.0, "lidar_min_m": 0.25, "track_merge_deg": 15.0,
+    "calib_record_s": 0,                           # > 0: record that many seconds of calibration data to ~/logs
 }
 
 
