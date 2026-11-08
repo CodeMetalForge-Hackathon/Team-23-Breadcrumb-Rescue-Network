@@ -301,6 +301,17 @@ def create_app(state):
             abort(404)
         return app.response_class(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
+    @app.get("/static/<path:name>")
+    def static_file(name):
+        return send_from_directory(STATIC, name)
+
+    @app.get("/api/cloud")
+    def api_cloud():
+        snap = state.map.cloud_snapshot()
+        if snap is None:
+            abort(404)
+        return jsonify(snap)
+
     @app.get("/api/map")
     def api_map():
         snap = state.map.snapshot()

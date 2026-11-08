@@ -29,6 +29,11 @@ try:
     from mapping.relay import suggest_relays
 except Exception:
     suggest_relays = None
+try:
+    from dashboard.cloud import Cloud            # 3D view (codex_02): add_scan(...), snapshot(persons)
+except Exception as e:
+    Cloud = None
+    log.info("no 3D cloud (%s)", e)
 
 PERSON_TTL = 180          # s a person stays on the map after the last sighting
 PNG_EVERY = 1.0           # s between map image renders
@@ -76,6 +81,12 @@ class MapState:
         self.scans, self.last_scan, self.hz = 0, None, 0.0
         self.scan_ok, self.reject_reason = True, None
         self.link = {}                       # lvl, rssi, tilt from the last meta
+        self.cloud = None
+        if Cloud is not None:
+            try:
+                self.cloud = Cloud()
+            except Exception:
+                log.exception("Cloud()")
         try:
             self.nodes = json.loads(self.nodes_file.read_text())
         except (OSError, ValueError):
@@ -117,6 +128,11 @@ class MapState:
                 except Exception as e:
                     self.slam_error = f"update: {e}"
                     log.exception("slam.update")
+            if self.cloud is not None:
+                try:
+                    self.cloud.add_scan(self.pose, ang, dist, acc, self.scan_ok)
+                except Exception:
+                    log.exception("cloud.add_scan")
             px, py, _ = self.pose
             if not self.path or math.hypot(px - self.path[-1][0], py - self.path[-1][1]) > 0.05:
                 self.path.append([round(px, 3), round(py, 3)])
@@ -239,6 +255,17 @@ class MapState:
                 "persons": persons, "nodes": dict(self.nodes), "relays": self.relays,
                 "png": self.png_info, "link": self.link,
             }
+
+    def cloud_snapshot(self):
+        if self.cloud is None:
+            return None
+        with self.lock:
+            persons = [dict(p) for p in self.persons.values()]
+            pose, path = self.pose, list(self.path)
+        try:
+            return self.cloud.snapshot(persons=persons, pose=pose, path=path, nodes=dict(self.nodes))
+        except TypeError:
+            return self.cloud.snapshot(persons)
 
     def png_bytes(self):
         with self.lock:

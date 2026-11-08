@@ -130,6 +130,7 @@ section.side { overflow-y: auto; }
 #remote { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 #remote figure { margin: 0; }
 #remote img, #remote canvas { width: 100%; display: block; background: #000; border-radius: 8px; aspect-ratio: 4 / 3; object-fit: contain; max-height: 30vh; }
+#view3d { width: 100%; aspect-ratio: 4 / 3; max-height: 30vh; background: #000; border-radius: 8px; overflow: hidden; }
 #remote figcaption { font-size: 16px; color: var(--muted); margin-top: 4px; }
 #remote figcaption.stale { color: var(--warn); }
 h2.sub-h { margin-top: 18px; }
@@ -171,7 +172,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
     <div id="remote">
       <figure><img id="rcam" alt="Spotter camera"><figcaption id="rcam-t">Camera: waiting for the first frame</figcaption></figure>
       <figure><img id="rthermal" alt="Spotter thermal camera"><figcaption id="rthermal-t">Thermal: waiting</figcaption></figure>
-      <figure><canvas id="rlidar" width="400" height="300"></canvas><figcaption id="rlidar-t">LiDAR: waiting</figcaption></figure>
+      <figure id="fig3d"><div id="view3d" hidden></div><canvas id="rlidar" width="400" height="300"></canvas><figcaption id="rlidar-t">LiDAR: waiting</figcaption></figure>
     </div>
     <div id="rstats"></div>
   </section>
@@ -749,5 +750,8 @@ window.addEventListener("resize", drawPlan);
 refreshPlan();
 setInterval(refreshPlan, 500);
 </script>
+<!-- 3D point cloud + people (codex_02). Optional: without these files the pane keeps the LiDAR view. -->
+<script src="/static/vendor/three.min.js" onerror="void 0"></script>
+<script src="/static/view3d.js" onerror="void 0"></script>
 </body>
 </html>
