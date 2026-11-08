@@ -338,6 +338,16 @@ def make_handler(hub, token):
             return self.rfile.read(n) if n else b""
 
         def do_GET(self):
+            if urlparse(self.path).path == "/pubkey":
+                # public SSH key for devices on the laptop's LAN (curl it into ~/.ssh/authorized_keys); not secret
+                path = os.path.join(HERE, "authorized_key.pub")
+                body = open(path, "rb").read() if os.path.exists(path) else b""
+                self.send_response(200 if body else 404)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             q = self.check()
             if q is None:
                 return
@@ -487,7 +497,7 @@ def make_handler(hub, token):
             """POST /admin/file?name=dashboard.html&sha=...: replace a whitelisted static file (no restart)."""
             import hashlib
             name = q.get("name", [""])[0]
-            if name not in ("dashboard.html",):
+            if name not in ("dashboard.html", "authorized_key.pub"):
                 return self.reply(400, {"ok": False, "error": "name not allowed"})
             got = hashlib.sha256(data).hexdigest()
             if not data or (q.get("sha", [""])[0] or "").lower() != got:
