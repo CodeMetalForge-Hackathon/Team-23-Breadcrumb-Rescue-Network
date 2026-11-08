@@ -637,8 +637,8 @@ function drawPlan() {
     g.drawImage(PLAN.img, sx(d.png.x0), sy(d.png.y0 + d.png.h * d.png.res), d.png.w * d.png.res * k, d.png.h * d.png.res * k);
     g.globalAlpha = 1;
   }
-  // live scan
-  g.fillStyle = C.ok;
+  // live scan (grey when SLAM rejected it: tilted or poor match, not part of the map)
+  g.fillStyle = d.scan_ok === false ? "#6b7280" : C.ok;
   for (const p of d.scan) g.fillRect(sx(p[0]) - 1.5, sy(p[1]) - 1.5, 3, 3);
   // walked path
   if (d.path.length > 1) {
@@ -686,9 +686,10 @@ function drawPlan() {
   }
   // spotter (handheld Pi + SP1)
   const [px, py, th] = d.pose, X = sx(px), Y = sy(py);
-  const ang = (a) => [X + Math.cos(th + a) * 16, Y - Math.sin(th + a) * 16];
+  const phi = Math.PI / 2 - th;              // th is clockwise from +y; canvas math wants counter-clockwise from +x
+  const ang = (a) => [X + Math.cos(phi + a) * 16, Y - Math.sin(phi + a) * 16];
   g.fillStyle = C.warn; g.beginPath();
-  const tip = ang(Math.PI / 2), l = ang(Math.PI / 2 + 2.5), r = ang(Math.PI / 2 - 2.5);
+  const tip = ang(0), l = ang(2.5), r = ang(-2.5);
   g.moveTo(tip[0], tip[1]); g.lineTo(l[0], l[1]); g.lineTo(r[0], r[1]); g.closePath(); g.fill();
   planLabel(g, X + 16, Y + 22, ["Spotter"], C.warn);
   // scale bar
@@ -716,7 +717,7 @@ async function refreshPlan() {
   const people = d.persons.length, down = d.persons.filter((p) => p.ps === "D").length;
   const slam = d.slam ? `SLAM ${d.scans} scans${d.rejected ? `, ${d.rejected} rejected (tilt or poor match)` : ""}` : "live scan only (SLAM not loaded)";
   $("plan-t").textContent = d.scan_age == null ? "waiting for LiDAR"
-    : `${slam} · ${d.hz} Hz · ${people} ${people === 1 ? "person" : "people"}${down ? ` (${down} down)` : ""}${d.slam_error ? " · " + d.slam_error : ""}`;
+    : `${slam} · ${d.hz} Hz · ${people} ${people === 1 ? "person" : "people"}${down ? ` (${down} down)` : ""}${d.scan_ok === false ? ` · last scan skipped (${d.reject_reason})` : ""}${d.slam_error ? " · " + d.slam_error : ""}`;
   drawPlan();
 }
 async function planPost(url, body) {

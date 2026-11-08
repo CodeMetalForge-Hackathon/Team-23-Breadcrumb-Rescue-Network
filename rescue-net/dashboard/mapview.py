@@ -2,8 +2,9 @@
 PERSON alerts with bearing/range), relay node positions marked by the operator, and suggested relay spots.
 
 Works without the mapping package too: the Pi then stays at the origin and only the live scan is drawn.
-Map frame (shared with mapping.slam): first pose (0,0,0); a sensor point (sin(a)*d, cos(a)*d) at pose (px,py,th)
-maps to (px + cos(th)*sx - sin(th)*sy, py + sin(th)*sx + cos(th)*sy). grid img[iy, ix] covers
+Map frame (shared with mapping.slam): first pose (0,0,0), th = heading in radians CLOCKWISE from the initial +y;
+a sensor point (sx, sy) = (sin(a)*d, cos(a)*d) at pose (px,py,th) maps to
+(px + cos(th)*sx + sin(th)*sy, py - sin(th)*sx + cos(th)*sy)  (th = pi/2: straight ahead is +x). grid img[iy, ix] covers
 (ox + (ix+.5)*res, oy + (iy+.5)*res).
 """
 import json
@@ -55,7 +56,7 @@ def sensor_to_map(pose, bearing_deg, range_m):
     px, py, th = pose
     a = np.radians(bearing_deg)
     sx, sy = np.sin(a) * range_m, np.cos(a) * range_m
-    return px + math.cos(th) * sx - math.sin(th) * sy, py + math.sin(th) * sx + math.cos(th) * sy
+    return px + math.cos(th) * sx + math.sin(th) * sy, py - math.sin(th) * sx + math.cos(th) * sy
 
 
 class MapState:
@@ -73,6 +74,7 @@ class MapState:
         self.relays = []
         self.png, self.png_info, self._png_t, self._relay_t = None, None, 0.0, 0.0
         self.scans, self.last_scan, self.hz = 0, None, 0.0
+        self.scan_ok, self.reject_reason = True, None
         self.link = {}                       # lvl, rssi, tilt from the last meta
         try:
             self.nodes = json.loads(self.nodes_file.read_text())
@@ -108,8 +110,10 @@ class MapState:
             self.scans += 1
             if self.slam is not None and len(idx) >= 10:
                 try:
-                    self.slam.update(ang, dist, t=t, acc=acc)
+                    res = self.slam.update(ang, dist, t=t, acc=acc)
                     self.pose = tuple(float(v) for v in self.slam.pose)
+                    self.scan_ok = bool(res.get("ok", True)) if isinstance(res, dict) else True
+                    self.reject_reason = None if self.scan_ok else str(res.get("reason") or "rejected")
                 except Exception as e:
                     self.slam_error = f"update: {e}"
                     log.exception("slam.update")
@@ -228,6 +232,7 @@ class MapState:
             return {
                 "slam": self.slam is not None, "slam_error": self.slam_error,
                 "pose": [round(v, 3) for v in self.pose], "path": path, "scan": self.scan,
+                "scan_ok": self.scan_ok, "reject_reason": self.reject_reason,
                 "scan_age": None if self.last_scan is None else round(now - self.last_scan, 1),
                 "hz": round(self.hz, 1), "scans": self.scans,
                 "rejected": getattr(self.slam, "rejected", None),
