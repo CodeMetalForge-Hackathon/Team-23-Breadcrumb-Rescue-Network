@@ -18,7 +18,7 @@ Obs = namedtuple("Obs", "src b r rs ps c det u")
 
 # per camera: config keys for field of view, yaw, direction (+1: image right = clockwise), and image h / w
 CAMERAS = {
-    "C": ("cam_hfov", "cam_yaw", "cam_dir", 9 / 16),      # Camera Module 3 (IMX708), full 16:9 field of view
+    "C": ("cam_hfov", "cam_yaw", "cam_dir", 9 / 16),      # Camera Module 3 (IMX708), 16:9 (1536x864 mode)
     "T": ("th_hfov", "th_yaw", "th_dir", 512 / 640),      # USB thermal camera, 640x512
 }
 

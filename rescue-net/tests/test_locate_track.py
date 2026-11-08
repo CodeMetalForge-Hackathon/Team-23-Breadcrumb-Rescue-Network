@@ -197,5 +197,6 @@ def test_calib_fit_recovers_yaw_hfov_direction():
                        "ang": np.round(a * 10).astype(int).tolist(), "mm": np.round(d).astype(int).tolist()})
     pts = calib.pairs(frames)["C"]
     assert len(pts) == 120
-    yaw, hfov, direction, rms = calib.fit(pts)
-    assert direction == -1 and abs(((yaw - 350) + 180) % 360 - 180) < 1.5 and abs(hfov - 62) < 3 and rms < 1.5
+    pts += [(0.5, 200.0)] * 20                            # outliers: someone else / the wall
+    yaw, hfov, direction, rms, frac = calib.fit(pts)
+    assert frac > 0.8 and direction == -1 and abs(((yaw - 350) + 180) % 360 - 180) < 1.5 and abs(hfov - 62) < 3 and rms < 1.5

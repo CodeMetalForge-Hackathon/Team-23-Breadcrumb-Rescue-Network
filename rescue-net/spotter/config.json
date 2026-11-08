@@ -9,7 +9,7 @@
   "down_angle_deg": 55, "down_aspect": 1.3,
   "bulk_period": 0.25, "bulk_gap": 0.003,
   "thermal_detect": true, "thermal_det_every": 2, "thermal_min_score": 0.45,
-  "cam_hfov": 66.0, "cam_yaw": 0.0, "cam_dir": 1, "th_hfov": 50.0, "th_yaw": 0.0, "th_dir": 1,
+  "cam_hfov": 48.0, "cam_yaw": 356.5, "cam_dir": 1, "th_hfov": 40.0, "th_yaw": 358.5, "th_dir": 1,
   "lidar_win_deg": 3.0, "lidar_min_m": 0.25, "track_merge_deg": 15.0,
   "calib_record_s": 0
 }

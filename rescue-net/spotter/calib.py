@@ -74,10 +74,12 @@ def bins_of(frame):
     return out
 
 
-def person_bearing(bins, bg, min_gap=0.3, max_m=6.0):
-    """Bearing (deg) of the largest run of degrees that are clearly closer than the background, or None."""
+def person_bearing(bins, bg, min_gap=0.3, max_m=6.0, behind=(110, 250)):
+    """Bearing (deg) of the largest run of degrees that are clearly closer than the background, or None.
+    Degrees behind the rig (where it hits itself and the people working at it) are not searched."""
     fg = (bins < bg - min_gap) & (bins < max_m)
     fg = np.where(np.isnan(bins), False, fg)
+    fg[behind[0]:behind[1] + 1] = False
     if not fg.any():
         return None
     if fg.all():
@@ -122,24 +124,34 @@ def pairs(frames):
     return out
 
 
-def fit(pts, hfov_fixed=None):
-    """Best (yaw, hfov, direction, rms_deg) for bearing = yaw + dir * atan((u - .5) * 2 tan(hfov/2))."""
+def fit(pts, hfov_fixed=None, inlier_deg=6.0):
+    """Best (yaw, hfov, direction, rms_deg, inlier fraction) for bearing = yaw + dir * atan((u - .5) * 2 tan(hfov/2)).
+    Robust: for each candidate, yaw is the mode of (bearing - offset); score = pairs within inlier_deg of it."""
     from spotter.locate import angdiff
     u = np.array([p[0] for p in pts])
     b = np.array([p[1] for p in pts])
-    spread = u.max() - u.min()
-    hfovs = [hfov_fixed] if (hfov_fixed or spread < 0.25) else np.arange(20, 120.01, 0.25)
+    spread = np.percentile(u, 95) - np.percentile(u, 5)
+    hfovs = [hfov_fixed] if (hfov_fixed or spread < 0.25) else np.arange(20, 120.01, 0.5)
     best = None
     for direction in (1, -1):
         for hfov in hfovs:
             off = direction * np.degrees(np.arctan((u - 0.5) * 2 * math.tan(math.radians(hfov) / 2)))
-            rad = np.radians(b - off)
+            r = (b - off) % 360
+            hist = np.bincount(np.round(r).astype(int) % 360, minlength=360)
+            win = np.convolve(np.concatenate([hist[-6:], hist, hist[:6]]), np.ones(13), "valid")[:360]
+            yaw0 = float(np.argmax(win))
+            inl = np.abs(angdiff(r, yaw0)) <= inlier_deg
+            if not inl.any():
+                continue
+            rad = np.radians(r[inl])
             yaw = math.degrees(math.atan2(np.sin(rad).mean(), np.cos(rad).mean())) % 360
-            res = angdiff(b, (yaw + off) % 360)
-            rms = float(np.sqrt(np.mean(res ** 2)))
-            if best is None or rms < best[3]:
-                best = (yaw, float(hfov), direction, rms)
-    return best
+            res = angdiff(r, yaw)
+            score = float(np.clip(1 - (res / inlier_deg) ** 2, 0, None).sum())   # more inliers, and tighter
+            if best is None or score > best[0]:
+                inl = np.abs(res) <= inlier_deg
+                best = (score, yaw, float(hfov), direction, float(np.sqrt(np.mean(res[inl] ** 2))), inl.mean())
+    _, yaw, hfov, direction, rms, frac = best
+    return yaw, hfov, direction, rms, float(frac)
 
 
 def main(path, default_hfov=None):
@@ -152,9 +164,9 @@ def main(path, default_hfov=None):
             print(f"{src}: only {len(pts)} usable revolutions, skipped")
             continue
         u = [p[0] for p in pts]
-        yaw, hfov, direction, rms = fit(pts, (default_hfov or {}).get(src))
+        yaw, hfov, direction, rms, frac = fit(pts, (default_hfov or {}).get(src))
         print(f"{src}: {len(pts)} pairs, u {min(u):.2f}..{max(u):.2f}  ->  yaw {yaw:.1f}  hfov {hfov:.1f}  "
-              f"dir {direction:+d}  rms {rms:.1f} deg")
+              f"dir {direction:+d}  rms {rms:.1f} deg over {frac:.0%} inliers")
         out.update({ykey: round(yaw, 1), hkey: round(hfov, 1), dkey: direction})
     print(json.dumps(out))
     return out

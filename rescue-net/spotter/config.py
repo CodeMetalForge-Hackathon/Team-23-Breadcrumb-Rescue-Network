@@ -21,7 +21,8 @@ DEFAULTS = {
     "thermal_detect": True, "thermal_det_every": 2, "thermal_min_score": 0.45,   # pose model on the USB thermal camera
     # where people are, in the LiDAR frame: camera field of view (deg), yaw (LiDAR angle of the optical axis),
     # direction (+1: image right = clockwise), LiDAR window around a bearing, and the rig's own returns to ignore
-    "cam_hfov": 66.0, "cam_yaw": 0.0, "cam_dir": 1, "th_hfov": 50.0, "th_yaw": 0.0, "th_dir": 1,
+    # calibrated 2026-11-08 with spotter/calib.py; the camera runs the 1536x864 sensor mode (cropped, ~47 deg)
+    "cam_hfov": 48.0, "cam_yaw": 356.5, "cam_dir": 1, "th_hfov": 40.0, "th_yaw": 358.5, "th_dir": 1,
     "lidar_win_deg": 3.0, "lidar_min_m": 0.25, "track_merge_deg": 15.0,
     "calib_record_s": 0,                           # > 0: record that many seconds of calibration data to ~/logs
 }
