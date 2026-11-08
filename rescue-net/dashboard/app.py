@@ -342,6 +342,11 @@ def create_app(state):
             abort(400)
         return jsonify(ok=True)
 
+    @app.post("/api/map/pause")
+    def api_map_pause():
+        body = request.get_json(silent=True) or {}
+        return jsonify(ok=True, paused=state.map.set_paused(bool(body.get("paused", True))))
+
     @app.post("/api/map/reset")
     def api_map_reset():
         state.map.reset()

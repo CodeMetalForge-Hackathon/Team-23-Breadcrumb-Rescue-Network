@@ -202,6 +202,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
       <button id="plan-raw" class="active" aria-pressed="true" title="Show the raw LiDAR scan and occupancy map">Raw scan</button>
       <span>Mark relay:</span>
       <button data-node="B2" title="Mark B2 at SP1's position">B2 here</button><button data-node="B1" title="Mark B1 at SP1's position">B1 here</button><button data-node="BASE" title="Mark BASE at SP1's position">BASE here</button>
+      <button id="plan-pause" aria-pressed="false" title="Pause mapping before setting the rig down on the floor; resume after picking it up at the same spot">Pause map</button>
       <button id="plan-reset" title="Start a new map and clear relay positions">Reset map</button>
       <span class="plan-hint">Scroll to zoom · drag to pan</span>
     </div>
@@ -841,7 +842,12 @@ async function refreshPlan() {
   const fresh = d.persons.filter(freshPerson), people = fresh.length, down = fresh.filter((p) => p.ps === "D").length;
   const earlier = d.persons.length - people;
   const slam = d.slam ? `SLAM ${d.scans} scans${d.rejected ? `, ${d.rejected} rejected (tilt or poor match)` : ""}` : "live scan only (SLAM not loaded)";
-  $("plan-t").textContent = d.scan_age == null ? "waiting for LiDAR"
+  const pb = $("plan-pause");
+  pb.textContent = d.paused ? "Resume map" : "Pause map";
+  pb.classList.toggle("active", !!d.paused);
+  pb.setAttribute("aria-pressed", d.paused ? "true" : "false");
+  $("plan-t").textContent = d.paused ? `Mapping paused (rig set down) · ${d.scans} scans · live view continues`
+    : d.scan_age == null ? "waiting for LiDAR"
     : `${slam} · ${d.hz} Hz · ${people} live ${people === 1 ? "person" : "people"}${down ? ` (${down} down)` : ""}${earlier ? ` · ${earlier} earlier` : ""}${d.scan_ok === false ? ` · last scan skipped (${d.reject_reason})` : ""}${d.slam_error ? " · " + d.slam_error : ""}`;
   $("plan-t").title = $("plan-t").textContent;
   drawPlan();
@@ -851,6 +857,7 @@ async function planPost(url, body) {
   refreshPlan();
 }
 document.querySelectorAll("#plan-tools button[data-node]").forEach((b) => b.addEventListener("click", () => planPost(`/api/map/node/${b.dataset.node}`, { here: true })));
+$("plan-pause").addEventListener("click", () => planPost("/api/map/pause", { paused: $("plan-pause").getAttribute("aria-pressed") !== "true" }));
 $("plan-reset").addEventListener("click", () => { if (confirm("Start a new map and clear relay positions?")) { PLAN.manualView = null; PLAN.view = null; planPost("/api/map/reset"); } });
 $("plan-fit").addEventListener("click", () => { PLAN.manualView = null; PLAN.view = null; drawPlan(); });
 $("plan-labels").addEventListener("click", () => {

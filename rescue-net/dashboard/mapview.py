@@ -7,6 +7,7 @@ a sensor point (sx, sy) = (sin(a)*d, cos(a)*d) at pose (px,py,th) maps to
 (px + cos(th)*sx + sin(th)*sy, py - sin(th)*sx + cos(th)*sy)  (th = pi/2: straight ahead is +x). grid img[iy, ix] covers
 (ox + (ix+.5)*res, oy + (iy+.5)*res).
 """
+import collections
 import json
 import logging
 import math
@@ -85,6 +86,8 @@ class MapState:
         self.relays = []
         self.png, self.png_info, self._png_t, self._relay_t = None, None, 0.0, 0.0
         self.walls, self._walls_t = [], 0.0
+        self._times = collections.deque()
+        self.paused = False                  # operator paused mapping (rig set down on the floor)
         self.scans, self.last_scan, self.hz = 0, None, 0.0
         self.scan_ok, self.reject_reason = True, None
         self.link = {}                       # lvl, rssi, tilt from the last meta
@@ -119,9 +122,10 @@ class MapState:
         idx = np.nonzero(mm > 0)[0]
         ang, dist = idx.astype(np.float64), mm[idx]
         with self.lock:
-            if self.last_scan is not None:
-                dt = max(now - self.last_scan, 1e-3)
-                self.hz = 0.8 * self.hz + 0.2 / dt
+            self._times.append(now)
+            while self._times and now - self._times[0] > 5.0:
+                self._times.popleft()
+            self.hz = (len(self._times) - 1) / max(now - self._times[0], 1e-3) if len(self._times) > 1 else 0.0
             self.last_scan = now
             self.scans += 1
             if self.slam is not None and len(idx) >= 10:
@@ -130,6 +134,8 @@ class MapState:
                     self.pose = tuple(float(v) for v in self.slam.pose)
                     self.scan_ok = bool(res.get("ok", True)) if isinstance(res, dict) else True
                     self.reject_reason = None if self.scan_ok else str(res.get("reason") or "rejected")
+                    if self.paused:
+                        self.scan_ok, self.reject_reason = True, None    # paused on purpose, not a tracking failure
                 except Exception as e:
                     self.slam_error = f"update: {e}"
                     log.exception("slam.update")
@@ -219,9 +225,18 @@ class MapState:
             self._relay_t = 0.0
         return True
 
+    def set_paused(self, paused):
+        """Pause mapping while the rig rests low (on the floor for the posture view); resume at the same spot."""
+        with self.lock:
+            self.paused = bool(paused)
+            if self.slam is not None and hasattr(self.slam, "set_mapping_enabled"):
+                self.slam.set_mapping_enabled(not self.paused)
+        return self.paused
+
     def reset(self):
         with self.lock:
             self._new_slam()
+            self.paused = False
             self.pose, self.path, self.scan, self.persons, self.relays = (0.0, 0.0, 0.0), [], [], {}, []
             self.nodes = {}                  # new origin: press D2 on each node again (BASE first, at the start)
             self.png, self.png_info, self.walls = None, None, []
@@ -289,7 +304,7 @@ class MapState:
                 "hz": round(self.hz, 1), "scans": self.scans,
                 "rejected": getattr(self.slam, "rejected", None),
                 "persons": persons, "nodes": dict(self.nodes), "relays": self.relays, "walls": self.walls,
-                "png": self.png_info, "link": self.link,
+                "png": self.png_info, "link": self.link, "paused": self.paused,
             }
 
     def cloud_snapshot(self):
