@@ -21,7 +21,7 @@
     fallback.style.display = "none"; // #remote canvas otherwise overrides the hidden attribute
     Object.assign(view.style, { position: "relative", touchAction: "none" });
     view.setAttribute("role", "img");
-    view.setAttribute("aria-label", "3D LiDAR cloud, people, spotter path and relay nodes");
+    view.setAttribute("aria-label", "3D LiDAR cloud, people, SP1 path and relay nodes");
     renderer.setClearColor(0x090e16, 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     Object.assign(renderer.domElement.style, {
@@ -87,16 +87,24 @@
 
     const target = new T.Vector3(0, 0, 0);
     let azimuth = 0.7, elevation = 0.62, distance = 12;
-    let orbit = true, dragging = false, lastInteraction = -Infinity, fitted = false;
+    let dragging = false, fitted = false, manualCamera = false;
     let lastData = null, version = null, pathKey = "", peopleKey = "", nodesKey = "";
     let lastSuccess = 0, fetching = false, alive = true, pollTimer, frame;
-    const orbitButton = button("Pause", "Pause automatic orbit; drag to rotate, scroll to zoom", () => {
-      orbit = !orbit;
-      orbitButton.textContent = orbit ? "Pause" : "Orbit";
-      orbitButton.setAttribute("aria-pressed", String(!orbit));
+    const presets = [];
+    function preset(text, azimuthValue, elevationValue) {
+      const b = button(text, `Use the ${text} view; drag to adjust`, () => {
+        azimuth = azimuthValue; elevation = elevationValue; manualCamera = true;
+        presets.forEach((item) => item.setAttribute("aria-pressed", String(item === b)));
+      });
+      b.setAttribute("aria-pressed", String(text === "3/4"));
+      presets.push(b);
+    }
+    preset("Top", 0, Math.PI / 2 - 0.01);
+    preset("Side", Math.PI / 2, 0.08);
+    preset("3/4", 0.7, 0.62);
+    button("Fit", "Fit the whole cloud and path; double-click also fits", () => {
+      fit(lastData, true); manualCamera = false;
     });
-    orbitButton.setAttribute("aria-pressed", "false");
-    button("Fit", "Fit the whole cloud and path; double-click also fits", () => fit(lastData, true));
 
     function resize() {
       const width = Math.max(1, view.clientWidth), height = Math.max(1, view.clientHeight);
@@ -112,7 +120,8 @@
     view.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || event.target.closest("button")) return;
       dragging = true;
-      lastInteraction = performance.now();
+      manualCamera = true;
+      presets.forEach((item) => item.setAttribute("aria-pressed", "false"));
       view.setPointerCapture(event.pointerId);
       renderer.domElement.style.cursor = "grabbing";
       dragX = event.clientX;
@@ -125,11 +134,9 @@
       elevation = T.MathUtils.clamp(elevation + (event.clientY - dragY) * 0.008, 0.08, 1.48);
       dragX = event.clientX;
       dragY = event.clientY;
-      lastInteraction = performance.now();
     });
     function stopDrag() {
       dragging = false;
-      lastInteraction = performance.now();
       renderer.domElement.style.cursor = "grab";
     }
     view.addEventListener("pointerup", stopDrag);
@@ -138,9 +145,9 @@
     view.addEventListener("wheel", (event) => {
       event.preventDefault();
       distance = T.MathUtils.clamp(distance * Math.exp(T.MathUtils.clamp(event.deltaY, -300, 300) * 0.0015), 2, 2500);
-      lastInteraction = performance.now();
+      manualCamera = true;
     }, { passive: false });
-    view.addEventListener("dblclick", () => fit(lastData, true));
+    view.addEventListener("dblclick", () => { fit(lastData, true); manualCamera = false; });
 
     function fit(data, immediate) {
       if (!data) return;
@@ -221,7 +228,13 @@
         if (!located(person)) continue;
         const down = person.ps === "D", upright = person.ps === "U";
         const color = down ? 0xff5d68 : upright ? 0xffd17b : 0xd3dce7;
-        const opacity = person.age != null && person.age > 15 ? 0.55 : 1;
+        if (person.age != null && person.age >= 15) {
+          const geometry = new T.BufferGeometry().setFromPoints([new T.Vector3(person.x, person.y, floor + .1)]);
+          peopleGroup.add(new T.Points(geometry, new T.PointsMaterial({ color, size: 3,
+            sizeAttenuation: false, transparent: true, opacity: .3 })));
+          continue;
+        }
+        const opacity = 1;
         const bearing = Math.hypot(pose[0] - person.x, pose[1] - person.y) > 0.05
           ? Math.atan2(person.x - pose[0], person.y - pose[1]) : pose[2];
         const right = [Math.cos(bearing), -Math.sin(bearing)];
@@ -315,7 +328,7 @@
         pathLine.geometry.dispose(); pathLine.geometry = geometry; pathKey = nextPath;
       }
       const nextPeople = JSON.stringify([data.pose, (data.persons || []).map((p) =>
-        [p.id, p.x, p.y, p.ps, p.kp, p.age != null && p.age > 15])]);
+        [p.id, p.x, p.y, p.ps, p.kp, p.age != null && p.age >= 15])]);
       if (nextPeople !== peopleKey) { drawPeople(data); peopleKey = nextPeople; }
       const nextNodes = JSON.stringify(data.nodes || {});
       if (nextNodes !== nodesKey) { drawNodes(data); nodesKey = nextNodes; }
@@ -323,7 +336,7 @@
       spotter.position.set(pose[0], pose[1], 0);
       spotter.rotation.z = -pose[2]; // heading clockwise from +y
       lastData = data;
-      if ((data.count > 0 || (data.path || []).length > 1) && (!fitted || performance.now() - lastInteraction > 15000))
+      if (!manualCamera && (data.count > 0 || (data.path || []).length > 1))
         fit(data, !fitted);
       view.dataset.points = String(data.count);
       view.dataset.people = String((data.persons || []).filter(located).length);
@@ -336,15 +349,17 @@
         caption.classList.toggle("stale", error);
         return;
       }
-      const people = lastData.persons || [], down = people.filter((p) => p.ps === "D").length;
+      const allPeople = lastData.persons || [];
+      const people = allPeople.filter((p) => p.age == null || p.age < 15), down = people.filter((p) => p.ps === "D").length;
       const unlocated = people.filter((p) => !located(p)).length;
       const stale = error || lastData.scan_age == null || lastData.scan_age > 3 || Date.now() - lastSuccess > 3500;
-      let status = `${lastData.count.toLocaleString()} points`;
-      if (people.length) status += ` | ${people.length} people${down ? `, ${down} down` : ""}`;
+      let status = `${lastData.count.toLocaleString()} pts`;
+      if (people.length) status += ` | ${people.length} live${down ? `, ${down} down` : ""}`;
       if (unlocated) status += ` | ${unlocated} unlocated`;
       status += stale ? " | scan stale" : lastData.scan_ok === false ? " | scan rejected" : "";
       caption.textContent = `3D LiDAR: ${status}`;
-      caption.title = `${lastData.tilt ? "IMU tilt relative to the level reference" : "Flat scan: no valid tilt sample"}. ` +
+      caption.title = `${caption.textContent}. ${lastData.tilt ? "IMU tilt relative to the level reference" : "Flat scan: no valid tilt sample"}. ` +
+        `${allPeople.length - people.length} earlier sightings are faded dots. ` +
         "Heights are relative to the LiDAR plane; person heights are schematic. Drag to orbit, scroll to zoom.";
       caption.classList.toggle("stale", stale || lastData.scan_ok === false);
       cloudMaterial.opacity = stale ? 0.38 : lastData.scan_ok === false ? 0.58 : 0.88;
@@ -377,9 +392,7 @@
       if (!alive) return;
       frame = requestAnimationFrame(animate);
       if (document.hidden || now - previousFrame < 32) return;
-      const delta = Math.min((now - previousFrame) / 1000, 0.1);
       previousFrame = now;
-      if (orbit && !dragging && now - lastInteraction > 5000) azimuth += delta * 0.045;
       camera.position.set(target.x + distance * Math.cos(elevation) * Math.sin(azimuth),
         target.y - distance * Math.cos(elevation) * Math.cos(azimuth), target.z + distance * Math.sin(elevation));
       camera.lookAt(target);

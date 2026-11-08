@@ -42,30 +42,51 @@ button:hover { background: var(--fg); color: var(--bg); }
 button:disabled { opacity: .5; cursor: default; }
 
 header {
-  display: flex; align-items: center; gap: 14px 18px; flex-wrap: wrap;
-  padding: 12px 20px; background: var(--panel); border-bottom: 2px solid var(--line);
+  display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; flex: 0 0 auto;
+  min-height: 60px; padding: 10px 16px; background: var(--panel); border-bottom: 2px solid var(--line);
 }
-h1 { font-size: 28px; margin: 0; white-space: nowrap; }
+h1 { font-size: 24px; margin: 0; white-space: nowrap; flex: 0 0 auto; }
 h1 span { color: var(--muted); font-weight: 600; }
-#counts { display: flex; gap: 8px; flex-wrap: wrap; }
-.count { padding: 4px 12px; border-radius: 999px; background: var(--c); color: var(--badge-fg); font-weight: 700; font-size: 18px; }
+#counts { display: flex; gap: 5px; flex-wrap: nowrap; flex: 0 0 auto; }
+.count { padding: 4px 9px; border-radius: 999px; background: var(--c); color: var(--badge-fg); font-weight: 700; font-size: 14px; white-space: nowrap; }
 .count.zero { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 2px var(--line); }
 .spacer { flex: 1; }
-#link { font-weight: 700; font-size: 18px; padding: 6px 14px; border-radius: 999px; border: 2px solid currentColor; white-space: nowrap; }
+header .spacer { min-width: 0; }
+header button { flex: 0 0 auto; font-size: 14px; padding: 6px 10px; white-space: nowrap; }
+#link { min-width: 0; max-width: 300px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto;
+        font-weight: 700; font-size: 14px; padding: 6px 10px; border-radius: 999px; border: 2px solid currentColor; white-space: nowrap; }
 #link.good { color: var(--ok); } #link.bad { color: var(--bad); } #link.info { color: var(--info); }
 #sound.off { border-color: var(--warn); color: var(--warn); }
-#clock { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; }
+#clock { flex: 0 0 auto; font-size: 25px; line-height: 1; white-space: nowrap; font-weight: 800; font-variant-numeric: tabular-nums; }
 
 main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr);
        grid-template-rows: minmax(0, 1fr) auto; gap: 12px; padding: 12px; }
 section.plan { grid-column: 1; grid-row: 1; }
 section.live { grid-column: 1; grid-row: 2; padding: 10px 14px; }
 section.side { grid-column: 2; grid-row: 1 / span 2; }
-#planwrap { flex: 1; min-height: 260px; position: relative; }
-#plan { position: absolute; inset: 0; width: 100%; height: 100%; background: #0d1014; border-radius: 8px; cursor: grab; }
-#plan-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 16px; color: var(--muted); }
-#plan-tools button { font-size: 15px; padding: 4px 10px; }
-#plan-t { font-size: 15px; }
+section.plan, section.live { overflow: hidden; }
+section.plan h2 { display: flex; gap: 12px; align-items: baseline; flex: 0 0 auto; white-space: nowrap; }
+#plan-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 10px; }
+#planwrap { min-width: 0; min-height: 0; position: relative; }
+#plan { position: absolute; inset: 0; width: 100%; height: 100%; background: #0d1014; border-radius: 8px; cursor: grab; touch-action: none; }
+#plan-tools { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;
+              font-size: 12px; color: var(--muted); }
+#plan-tools button { flex: 0 0 auto; font-size: 12px; line-height: 1.2; padding: 5px 8px; border-width: 1px; border-radius: 5px; }
+#plan-tools #plan-reset { margin-left: 4px; color: var(--muted); border-color: var(--line); }
+#plan-tools button.active { border-color: var(--info); color: var(--info); }
+#plan-tools .plan-hint { margin-left: auto; font-size: 11px; }
+#plan-people { min-width: 0; min-height: 0; overflow-y: auto; border-left: 1px solid var(--line); padding-left: 10px; }
+#plan-people h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+#plan-person-list { display: flex; flex-direction: column; gap: 5px; }
+.plan-person { display: block; flex: 0 0 auto; width: 100%; padding: 5px 7px; text-align: left; border: 1px solid var(--line); border-left: 3px solid var(--person); border-radius: 5px; font-size: 11px; line-height: 1.4; font-weight: 400; }
+.plan-person strong, .plan-person span { display: block; }
+.plan-person strong { font-size: 12px; }
+.plan-person span { color: var(--muted); }
+.plan-person.down { border-left-color: var(--sos); }
+.plan-person.old { opacity: .5; }
+.plan-person.selected, .plan-person:hover { opacity: 1; border-color: var(--info); background: var(--bg); color: var(--fg); }
+#plan-person-empty { margin: 6px 0; font-size: 12px; color: var(--muted); }
+#plan-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
 .side #map { max-height: 150px; }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; min-height: 0; display: flex; flex-direction: column; }
 h2 { margin: 0 0 10px; font-size: 22px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
@@ -128,16 +149,32 @@ button.reply:hover { background: var(--ok); color: var(--bg); }
 /* spotter live view (bulk link through the relay mesh) */
 section.side { overflow-y: auto; }
 #remote { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-#remote figure { margin: 0; }
-#remote img, #remote canvas { width: 100%; display: block; background: #000; border-radius: 8px; aspect-ratio: 4 / 3; object-fit: contain; max-height: 30vh; }
-#view3d { width: 100%; aspect-ratio: 4 / 3; max-height: 30vh; background: #000; border-radius: 8px; overflow: hidden; }
-#remote figcaption { font-size: 16px; color: var(--muted); margin-top: 4px; }
+#remote figure { margin: 0; min-width: 0; }
+#remote img, #remote canvas { width: 100%; height: auto; display: block; background: #000; border-radius: 8px; aspect-ratio: 4 / 3; object-fit: contain; max-height: none; }
+#view3d { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; }
+#remote figcaption { height: 2.7em; overflow: hidden; font-size: 13px; line-height: 1.35; color: var(--muted); margin-top: 5px; overflow-wrap: anywhere; }
+#view3d button[aria-pressed="true"] { box-shadow: inset 0 0 0 1px #72c7ff; }
 #remote figcaption.stale { color: var(--warn); }
 h2.sub-h { margin-top: 18px; }
 h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 15px; }
-#rstats { font-size: 15px; color: var(--muted); margin-top: 6px; }
+#rstats { font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 6px; }
+
+@media (max-width: 1500px) {
+  header { gap: 9px; }
+  h1 { font-size: 20px; }
+  .count { font-size: 12px; padding: 4px 7px; }
+  header button, #link { font-size: 12px; }
+  #clock { font-size: 23px; }
+  section { padding: 12px 14px; }
+  h2 { font-size: 20px; }
+  #plan-body { grid-template-columns: minmax(0, 1fr) 160px; }
+  #plan-tools .plan-hint { display: none; }
+}
 
 @media (max-width: 1000px) {
+  header { flex-wrap: wrap; }
+  h1 span { display: none; }
+  #counts { order: 1; flex: 1 0 100%; justify-content: space-between; }
   main { grid-template-columns: 1fr; grid-template-rows: auto; }
   section.plan, section.live, section.side { grid-column: 1; grid-row: auto; }
   #planwrap { min-height: 60vh; }
@@ -159,26 +196,35 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
 <main>
   <section class="plan">
     <h2>Floor plan <small id="plan-t">waiting for LiDAR</small></h2>
-    <div id="planwrap"><canvas id="plan"></canvas></div>
-    <div id="plan-tools">
-      <span>Mark a relay at the spotter's position:</span>
-      <button data-node="B2">B2 here</button><button data-node="B1">B1 here</button><button data-node="BASE">BASE here</button>
-      <span>(or drag a relay on the map)</span>
-      <span class="spacer"></span>
-      <button id="plan-reset" title="Start a new map">Reset map</button>
+    <div id="plan-tools" aria-label="Floor plan controls">
+      <button id="plan-fit" class="active" title="Return to automatic map fitting">Fit</button>
+      <button id="plan-labels" class="active" aria-pressed="true" title="Show or hide small marker labels">Labels</button>
+      <button id="plan-raw" class="active" aria-pressed="true" title="Show the raw LiDAR scan and occupancy map">Raw scan</button>
+      <span>Mark relay:</span>
+      <button data-node="B2" title="Mark B2 at SP1's position">B2 here</button><button data-node="B1" title="Mark B1 at SP1's position">B1 here</button><button data-node="BASE" title="Mark BASE at SP1's position">BASE here</button>
+      <button id="plan-reset" title="Start a new map and clear relay positions">Reset map</button>
+      <span class="plan-hint">Scroll to zoom · drag to pan</span>
+    </div>
+    <div id="plan-body">
+      <div id="planwrap"><canvas id="plan" aria-label="Floor plan; scroll to zoom, drag empty space to pan or a relay to move it"></canvas></div>
+      <aside id="plan-people" aria-label="People on the floor plan">
+        <h3>People <span id="plan-person-count"></span></h3>
+        <div id="plan-person-list"></div>
+        <p id="plan-person-empty">No sightings</p>
+      </aside>
     </div>
   </section>
   <section class="live">
     <div id="remote">
-      <figure><img id="rcam" alt="Spotter camera"><figcaption id="rcam-t">Camera: waiting for the first frame</figcaption></figure>
-      <figure><img id="rthermal" alt="Spotter thermal camera"><figcaption id="rthermal-t">Thermal: waiting</figcaption></figure>
+      <figure><img id="rcam" alt="SP1 camera"><figcaption id="rcam-t">Camera: waiting for the first frame</figcaption></figure>
+      <figure><img id="rthermal" alt="SP1 thermal camera"><figcaption id="rthermal-t">Thermal: waiting</figcaption></figure>
       <figure id="fig3d"><div id="view3d" hidden></div><canvas id="rlidar" width="400" height="300"></canvas><figcaption id="rlidar-t">LiDAR: waiting</figcaption></figure>
     </div>
     <div id="rstats"></div>
   </section>
   <section class="side">
     <h2>Relay chain</h2>
-    <svg id="map" viewBox="0 0 1000 400" role="img" aria-label="Relay chain with radio nodes"></svg>
+    <svg id="map" viewBox="0 0 1000 180" role="img" aria-label="Relay chain with radio node ids and last heard status"></svg>
     <div class="legend">
       <span><i style="background:var(--ok)"></i>heard &lt; 30 s ago</span>
       <span><i style="background:var(--warn)"></i>&lt; 60 s</span>
@@ -193,13 +239,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
 <script>
 "use strict";
 
-// Floor plan, deepest inside the building (left) to the entrance (right). Edit labels here.
-const NODES = [
-  { id: "SP1",  label: "Spotter" },
-  { id: "B2",   label: "Hallway" },     // LoRa gateway + Bluetooth phone scan
-  { id: "B1",   label: "Lobby" },       // relay + rescue Wi-Fi (survivor SOS page)
-  { id: "BASE", label: "Entrance" },
-];
+const NODES = [{ id: "SP1" }, { id: "B2" }, { id: "B1" }, { id: "BASE" }];
 const TYPE_ORDER = ["SOS", "PERSON", "PHONE", "HEAT", "HAZARD"];
 const TYPE_CLASS = { SOS: "sos", PERSON: "person", PHONE: "phone", HEAT: "heat", HAZARD: "hazard" };
 const VIEW = { L: "left of view", C: "centre of view", R: "right of view" };
@@ -229,14 +269,11 @@ function ago(s) {
 }
 
 // ---------- floor plan ----------
-const NX = (i) => 100 + i * (800 / (NODES.length - 1)), NY = 200;   // spotter far left, BASE outside at 900
+const NX = (i) => 100 + i * (800 / (NODES.length - 1)), NY = 65;
 const nodeEls = {};
 
 function buildMap() {
   const map = $("map");
-  map.appendChild(svg("path", { class: "wall", d: "M800 155 V40 H20 V360 H800 V245" }));
-  map.appendChild(svg("text", { class: "zone", x: 40, y: 72 }, "BUILDING"));
-  map.appendChild(svg("text", { class: "zone", x: 830, y: 72 }, "OUTSIDE"));
   for (let i = 0; i < NODES.length - 1; i++) {
     map.appendChild(svg("line", { class: "link", x1: NX(i), y1: NY, x2: NX(i + 1), y2: NY }));
   }
@@ -246,8 +283,7 @@ function buildMap() {
     g.appendChild(svg("circle", { class: "ring", cx: NX(i), cy: NY, r: 40 }));
     g.appendChild(svg("circle", { class: "dot", cx: NX(i), cy: NY, r: 40 }));
     g.appendChild(svg("text", { class: n.id.length > 3 ? "id long" : "id", x: NX(i), y: NY }, n.id));
-    g.appendChild(svg("text", { class: "label", x: NX(i), y: NY + 82 }, n.label));
-    const age = svg("text", { class: "age", x: NX(i), y: NY + 114 }, "never heard");
+    const age = svg("text", { class: "age", x: NX(i), y: NY + 76 }, "never heard");
     g.appendChild(age);
     map.appendChild(g);
     nodeEls[n.id] = { g, age, i, until: 0 };
@@ -279,7 +315,7 @@ function highlightRoute(a) {
   for (let k = 0; k < hops.length - 1; k++) {
     const i1 = nodeEls[hops[k]].i, i2 = nodeEls[hops[k + 1]].i;
     if (i1 === i2) continue;
-    const x1 = NX(i1), x2 = NX(i2), y = NY - 44, lift = 45 + 45 * (Math.abs(i2 - i1) - 1);
+    const x1 = NX(i1), x2 = NX(i2), y = NY - 44, lift = Math.min(16, 8 + 3 * (Math.abs(i2 - i1) - 1));
     const p = svg("path", { class: "arc", d: `M${x1} ${y} Q${(x1 + x2) / 2} ${y - 2 * lift} ${x2} ${y}` });
     p.style.stroke = `var(--${TYPE_CLASS[a.t] || "other"})`;
     $("arcs").appendChild(p);
@@ -330,7 +366,7 @@ function describe(a) {
       return {
         main: `${a.z || a.src} position marked`,
         details: [a.slam ? `x ${a.mx} m, y ${a.my} m on the floor plan` : "no SLAM map yet: placed at the start point",
-                  "button on the node, spotter held next to it"],
+                  "button on the node, SP1 held next to it"],
       };
     default:
       return { main: `${a.t || "Unknown"} message${a.msg ? `: ${a.msg}` : ""}`, details: extras(a) };
@@ -452,7 +488,7 @@ function renderCounts(alerts) {
 
 function renderLink(s) {
   const p = $("link");
-  if (s === null) { p.className = "bad"; p.textContent = "Dashboard server offline"; return; }
+  if (s === null) { p.className = "bad"; p.textContent = "Dashboard server offline"; p.title = p.textContent; return; }
   const src = s.source || "";
   if (s.serial_connected) {
     if (src.startsWith("mock") || src.startsWith("replay")) { p.className = "info"; p.textContent = src.replace(/^./, (c) => c.toUpperCase()); }
@@ -463,6 +499,7 @@ function renderLink(s) {
     p.className = "bad";
     p.textContent = `● Serial disconnected${src ? ` · ${src}` : ""}`;
   }
+  p.title = p.textContent;
 }
 
 // ---------- sound (Web Audio, no files; browsers need one click first) ----------
@@ -582,7 +619,7 @@ async function refreshRemote() {
   const li = r.lidar, lt = $("rlidar-t");
   if ($("view3d").hidden) {            // the 3D view (view3d.js) owns this pane and its caption once it is shown
     if (li.mm && li.seq !== remoteSeq.lidar) { remoteSeq.lidar = li.seq; drawLidar(li.mm); }
-    lt.textContent = li.seq == null ? "LiDAR: waiting" : `LiDAR around the spotter (1 m rings) · ${ageText(li.age)}`;
+    lt.textContent = li.seq == null ? "LiDAR: waiting" : `LiDAR around SP1 (1 m rings) · ${ageText(li.age)}`;
     lt.classList.toggle("stale", li.age != null && li.age > 10);
   }
   const lost = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].lost, 0);
@@ -595,29 +632,35 @@ refreshRemote();
 setInterval(refreshRemote, 300);
 
 // ---- floor plan: SLAM map, spotter path, relays, people (all in metres, map frame from the dashboard) ----
-const PLAN = { data: null, img: null, imgV: -1, view: null, drag: null, dragPos: null };
+const PLAN = { data: null, img: null, imgV: -1, view: null, manualView: null,
+               drag: null, dragPos: null, pan: null, labels: true, rawScan: null, highlight: null, rows: new Map() };
 const CHAIN = ["B2", "B1", "BASE"];
-const SRC_TEXT = { C: "camera", T: "thermal", CT: "camera + thermal" };
+const freshPerson = (person) => Number.isFinite(person.age) && person.age >= 0 && person.age < 15;
+const planWalls = (data) => (Array.isArray(data.walls) ? data.walls : [])
+  .filter((wall) => Array.isArray(wall) && wall.length === 4 && wall.every(Number.isFinite));
+const showRawPlan = (data) => PLAN.rawScan ?? (planWalls(data).length === 0);
 function planColors() {
   const css = getComputedStyle(document.documentElement), v = (n) => css.getPropertyValue(n).trim();
   return { ok: v("--ok"), warn: v("--warn"), off: v("--off"), bad: v("--sos"), info: v("--info"), hazard: v("--hazard"), person: v("--person") };
 }
 function planBounds(d) {
+  if (PLAN.manualView) return PLAN.manualView;
+  if (PLAN.drag && PLAN.view) return PLAN.view;
   const xs = [], ys = [];
-  const add = (x, y) => { if (x != null && y != null && isFinite(x) && isFinite(y)) { xs.push(x); ys.push(y); } };
+  const add = (x, y) => { if (Number.isFinite(x) && Number.isFinite(y)) { xs.push(x); ys.push(y); } };
   if (d.png) { add(d.png.x0, d.png.y0); add(d.png.x0 + d.png.w * d.png.res, d.png.y0 + d.png.h * d.png.res); }
+  for (const wall of planWalls(d)) { add(wall[0], wall[1]); add(wall[2], wall[3]); }
   add(d.pose[0], d.pose[1]);
   for (const p of d.path) add(p[0], p[1]);
-  for (const p of d.scan) add(p[0], p[1]);
   for (const n of Object.values(d.nodes)) add(n.x, n.y);
-  for (const p of d.persons) add(p.x, p.y);
-  let x0 = Math.min(...xs) - 1, x1 = Math.max(...xs) + 1, y0 = Math.min(...ys) - 1, y1 = Math.max(...ys) + 1;
-  const minSpan = 8;
+  for (const p of d.persons) if (freshPerson(p)) add(p.x, p.y);
+  if (!xs.length) add(0, 0);
+  let x0 = Math.min(...xs) - 0.3, x1 = Math.max(...xs) + 0.3, y0 = Math.min(...ys) - 0.3, y1 = Math.max(...ys) + 0.3;
+  const minSpan = 6;
   if (x1 - x0 < minSpan) { const c = (x0 + x1) / 2; x0 = c - minSpan / 2; x1 = c + minSpan / 2; }
   if (y1 - y0 < minSpan) { const c = (y0 + y1) / 2; y0 = c - minSpan / 2; y1 = c + minSpan / 2; }
-  const v = PLAN.view;                       // only grow, so the picture does not jump around while walking
-  if (v && !PLAN.resetView) { x0 = Math.min(x0, v.x0); x1 = Math.max(x1, v.x1); y0 = Math.min(y0, v.y0); y1 = Math.max(y1, v.y1); }
-  PLAN.resetView = false;
+  // Refit current map evidence. Raw rays, old people and a previous outlier
+  // must not leave the map permanently zoomed out.
   return { x0, x1, y0, y1 };
 }
 function drawPlan() {
@@ -629,18 +672,25 @@ function drawPlan() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.fillStyle = "#0d1014"; g.fillRect(0, 0, W, H);
   const b = PLAN.view = planBounds(d);
-  const k = Math.min(W / (b.x1 - b.x0), H / (b.y1 - b.y0));
+  const k = Math.min(Math.max(1, W - 24) / (b.x1 - b.x0), Math.max(1, H - 24) / (b.y1 - b.y0));
   const ox = W / 2 - k * (b.x0 + b.x1) / 2, oy = H / 2 + k * (b.y0 + b.y1) / 2;
   const sx = (x) => ox + k * x, sy = (y) => oy - k * y;
   PLAN.toMap = (px, py) => [(px - ox) / k, (oy - py) / k];
   PLAN.toScreen = (x, y) => [sx(x), sy(y)];
+  PLAN.scale = k;
+  c.dataset.view = PLAN.manualView ? "manual" : "auto";
+  $("plan-fit").classList.toggle("active", !PLAN.manualView);
   const C = planColors();
+  const walls = planWalls(d), raw = showRawPlan(d);
+  $("plan-raw").setAttribute("aria-pressed", String(raw));
+  $("plan-raw").classList.toggle("active", raw);
+  const occupied = [{ x: 8, y: H - 40, w: 140, h: 32 }];
   // 1 m grid
   g.strokeStyle = "#1a2027"; g.lineWidth = 1;
   for (let x = Math.ceil(b.x0); x <= b.x1; x++) { g.beginPath(); g.moveTo(sx(x), 0); g.lineTo(sx(x), H); g.stroke(); }
   for (let y = Math.ceil(b.y0); y <= b.y1; y++) { g.beginPath(); g.moveTo(0, sy(y)); g.lineTo(W, sy(y)); g.stroke(); }
   // SLAM occupancy map
-  if (d.png && PLAN.img && PLAN.img.complete && PLAN.img.naturalWidth) {
+  if (raw && d.png && PLAN.img && PLAN.img.complete && PLAN.img.naturalWidth) {
     g.imageSmoothingEnabled = false;
     g.globalAlpha = 0.95;
     g.drawImage(PLAN.img, sx(d.png.x0), sy(d.png.y0 + d.png.h * d.png.res), d.png.w * d.png.res * k, d.png.h * d.png.res * k);
@@ -648,7 +698,13 @@ function drawPlan() {
   }
   // live scan (grey when SLAM rejected it: tilted or poor match, not part of the map)
   g.fillStyle = d.scan_ok === false ? "#6b7280" : C.ok;
-  for (const p of d.scan) g.fillRect(sx(p[0]) - 1.5, sy(p[1]) - 1.5, 3, 3);
+  if (raw) for (const p of d.scan) g.fillRect(sx(p[0]) - 1.5, sy(p[1]) - 1.5, 3, 3);
+  // Vector walls remain crisp above either raw layer.
+  if (walls.length) {
+    g.strokeStyle = "#d7e1ec"; g.lineWidth = 3; g.lineCap = "round"; g.beginPath();
+    for (const [x1, y1, x2, y2] of walls) { g.moveTo(sx(x1), sy(y1)); g.lineTo(sx(x2), sy(y2)); }
+    g.stroke(); g.lineCap = "butt";
+  }
   // walked path
   if (d.path.length > 1) {
     g.strokeStyle = C.info; g.lineWidth = 2; g.globalAlpha = 0.8; g.beginPath();
@@ -674,24 +730,13 @@ function drawPlan() {
   for (const r of d.relays || []) {
     g.strokeStyle = C.hazard; g.lineWidth = 3; g.setLineDash([4, 4]);
     g.beginPath(); g.arc(sx(r.x), sy(r.y), 14, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]);
-    planLabel(g, sx(r.x) + 18, sy(r.y), ["Drop a relay here", r.reason || ""], C.hazard);
   }
   // relay nodes
   for (const id of CHAIN) {
     const p = pos(id); if (!p) continue;
-    g.fillStyle = hcol(id); g.beginPath(); g.arc(sx(p[0]), sy(p[1]), 15, 0, 2 * Math.PI); g.fill();
-    g.fillStyle = "#0b0d10"; g.font = "bold 13px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
-    g.fillText(id, sx(p[0]), sy(p[1])); g.textAlign = "left"; g.textBaseline = "alphabetic";
-  }
-  // people
-  for (const p of d.persons) {
-    if (p.x == null) continue;
-    const down = p.ps === "D", col = down ? C.bad : C.person, X = sx(p.x), Y = sy(p.y);
-    g.fillStyle = col; g.beginPath(); g.arc(X, Y, 11, 0, 2 * Math.PI); g.fill();
-    if (p.age < 3) { g.strokeStyle = col; g.lineWidth = 2; g.beginPath(); g.arc(X, Y, 18, 0, 2 * Math.PI); g.stroke(); }
-    const l1 = `Person ${p.id}${down ? " DOWN" : p.ps === "U" ? " upright" : ""}`;
-    const l2 = `${SRC_TEXT[p.src] || p.src || ""}${p.r ? ` · ${(+p.r).toFixed(1)} m${p.rs === "S" ? " (est.)" : ""}` : ""} · ${ageText(p.age)}`;
-    planLabel(g, X + 16, Y, [l1, l2], col);
+    g.fillStyle = hcol(id); g.globalAlpha = .3; g.beginPath(); g.arc(sx(p[0]), sy(p[1]), 12, 0, 2 * Math.PI); g.fill();
+    g.globalAlpha = 1; g.strokeStyle = hcol(id); g.lineWidth = 1.5; g.stroke();
+    if (PLAN.labels) markerText(g, sx(p[0]), sy(p[1]), id, occupied);
   }
   // spotter (handheld Pi + SP1)
   const [px, py, th] = d.pose, X = sx(px), Y = sy(py);
@@ -700,33 +745,105 @@ function drawPlan() {
   g.fillStyle = C.warn; g.beginPath();
   const tip = ang(0), l = ang(2.5), r = ang(-2.5);
   g.moveTo(tip[0], tip[1]); g.lineTo(l[0], l[1]); g.lineTo(r[0], r[1]); g.closePath(); g.fill();
-  planLabel(g, X + 16, Y + 22, ["Spotter"], C.warn);
+  if (PLAN.labels) {
+    g.fillStyle = "#0b0d10"; g.font = "bold 8px sans-serif"; g.textAlign = "center";
+    g.fillText("SP1", X, Y + 3); g.textAlign = "left";
+  }
+  occupied.push({ x: X - 16, y: Y - 16, w: 32, h: 32 });
+  // Historic sightings stay visible as small dots. Fresh labels have a
+  // strict budget and share collision bounds with the spotter and controls.
+  const people = d.persons.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  for (const p of people) {
+    const fresh = freshPerson(p), col = p.ps === "D" ? C.bad : C.person, X = sx(p.x), Y = sy(p.y);
+    g.globalAlpha = fresh ? .35 : .25;
+    g.fillStyle = col; g.beginPath(); g.arc(X, Y, fresh ? 8 : 3.5, 0, 2 * Math.PI); g.fill();
+    if (fresh) { g.globalAlpha = 1; g.strokeStyle = col; g.lineWidth = 1.5; g.stroke(); }
+    if (String(p.id) === PLAN.highlight) {
+      g.globalAlpha = 1; g.strokeStyle = C.info; g.lineWidth = 2;
+      g.beginPath(); g.arc(X, Y, 14, 0, 2 * Math.PI); g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+  const fresh = people.filter(freshPerson).sort((a, b) => (b.ps === "D") - (a.ps === "D") || a.age - b.age);
+  let labels = 0;
+  for (const p of fresh) {
+    if (PLAN.labels && markerText(g, sx(p.x), sy(p.y), String(p.id).slice(0, 6), occupied)) labels++;
+    if (labels >= 4) break;
+  }
   // scale bar
   const m = k >= 60 ? 1 : k >= 25 ? 2 : 5;
   g.strokeStyle = "#cfd6dd"; g.lineWidth = 3; g.beginPath(); g.moveTo(16, H - 16); g.lineTo(16 + m * k, H - 16); g.stroke();
   g.fillStyle = "#cfd6dd"; g.font = "13px sans-serif"; g.fillText(`${m} m`, 16, H - 22);
 }
-function planLabel(g, x, y, lines, col) {
-  lines = lines.filter(Boolean);
-  g.font = "bold 14px sans-serif";
-  const w = Math.max(...lines.map((t) => g.measureText(t).width)) + 12, h = lines.length * 18 + 6;
-  g.fillStyle = "rgba(0,0,0,0.72)"; g.fillRect(x, y - h / 2, w, h);
-  g.fillStyle = col; g.fillRect(x, y - h / 2, 3, h);
+function markerText(g, x, y, text, occupied) {
+  g.font = "bold 10px sans-serif";
+  const w = g.measureText(text).width + 6, h = 14;
+  const W = g.canvas.clientWidth, H = g.canvas.clientHeight;
+  if (x < 0 || y < 0 || x > W || y > H) return false;
+  const overlaps = (a, b) => a.x < b.x + b.w + 3 && a.x + a.w + 3 > b.x && a.y < b.y + b.h + 3 && a.y + a.h + 3 > b.y;
+  const offsets = [[-w / 2, -h / 2], [-w / 2, -h - 10], [12, -h / 2], [-w - 12, -h / 2], [-w / 2, 12]];
+  let box;
+  for (const [dx, dy] of offsets) {
+    const candidate = { x: Math.max(8, Math.min(W - w - 8, x + dx)),
+                        y: Math.max(8, Math.min(H - h - 8, y + dy)), w, h };
+    if (!occupied.some((other) => overlaps(candidate, other))) { box = candidate; break; }
+  }
+  if (!box || w > W - 16) return false;
+  occupied.push(box);
+  g.fillStyle = "rgba(13,16,20,0.28)"; g.fillRect(box.x, box.y, w, h);
   g.fillStyle = "#f4f6f8";
-  lines.forEach((t, i) => { g.font = i ? "13px sans-serif" : "bold 14px sans-serif"; g.fillText(t, x + 8, y - h / 2 + 17 + i * 18); });
+  g.fillText(text, box.x + 3, box.y + 10);
+  return true;
+}
+function highlightPerson(id, scroll = false) {
+  PLAN.highlight = id == null ? null : String(id);
+  for (const [pid, row] of PLAN.rows) row.classList.toggle("selected", pid === PLAN.highlight);
+  if (scroll && PLAN.rows.has(PLAN.highlight)) PLAN.rows.get(PLAN.highlight).scrollIntoView({ block: "nearest" });
+  drawPlan();
+}
+function renderPlanPeople(persons) {
+  const sorted = [...persons].sort((a, b) => Number(freshPerson(b)) - Number(freshPerson(a)) ||
+    (b.ps === "D") - (a.ps === "D") || (a.age ?? Infinity) - (b.age ?? Infinity));
+  const list = $("plan-person-list"), live = new Set();
+  sorted.forEach((person, index) => {
+    const id = String(person.id); live.add(id);
+    let row = PLAN.rows.get(id);
+    if (!row) {
+      row = el("button", "plan-person"); row.type = "button"; row.dataset.person = id;
+      row.append(el("strong"), el("span"), el("span"));
+      row.addEventListener("pointerenter", () => highlightPerson(id));
+      row.addEventListener("focus", () => highlightPerson(id));
+      row.addEventListener("click", () => highlightPerson(id));
+      PLAN.rows.set(id, row);
+    }
+    row.className = `plan-person${person.ps === "D" ? " down" : ""}${freshPerson(person) ? "" : " old"}${id === PLAN.highlight ? " selected" : ""}`;
+    row.children[0].textContent = `P${id} · ${person.ps === "D" ? "Down" : person.ps === "U" ? "Upright" : "Unknown"}`;
+    const range = Number.isFinite(person.r) && person.r > 0 ? `${person.r.toFixed(1)} m${person.rs === "S" ? " est." : ""}` : "range unknown";
+    row.children[1].textContent = `${range} · ${person.age == null ? "age unknown" : ageText(person.age)}`;
+    const source = { C: "Camera", T: "Thermal", CT: "Camera + thermal" }[person.src] ||
+      (person.src && person.src !== "-" ? person.src : "Source unknown");
+    row.children[2].textContent = `${source}${Number.isFinite(person.x) && Number.isFinite(person.y) ? "" : " · unlocated"}`;
+    if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+  });
+  for (const [id, row] of PLAN.rows) if (!live.has(id)) { row.remove(); PLAN.rows.delete(id); }
+  $("plan-person-count").textContent = `(${persons.length})`;
+  $("plan-person-empty").hidden = persons.length > 0;
 }
 async function refreshPlan() {
   let d;
   try { d = await (await fetch("/api/map", { cache: "no-store" })).json(); } catch (e) { return; }
   PLAN.data = d;
+  renderPlanPeople(d.persons);
   if (d.png && d.png.v !== PLAN.imgV) {
     PLAN.imgV = d.png.v;
     const img = new Image(); img.onload = () => { PLAN.img = img; drawPlan(); }; img.src = `/api/map.png?v=${d.png.v}`;
   }
-  const people = d.persons.length, down = d.persons.filter((p) => p.ps === "D").length;
+  const fresh = d.persons.filter(freshPerson), people = fresh.length, down = fresh.filter((p) => p.ps === "D").length;
+  const earlier = d.persons.length - people;
   const slam = d.slam ? `SLAM ${d.scans} scans${d.rejected ? `, ${d.rejected} rejected (tilt or poor match)` : ""}` : "live scan only (SLAM not loaded)";
   $("plan-t").textContent = d.scan_age == null ? "waiting for LiDAR"
-    : `${slam} · ${d.hz} Hz · ${people} ${people === 1 ? "person" : "people"}${down ? ` (${down} down)` : ""}${d.scan_ok === false ? ` · last scan skipped (${d.reject_reason})` : ""}${d.slam_error ? " · " + d.slam_error : ""}`;
+    : `${slam} · ${d.hz} Hz · ${people} live ${people === 1 ? "person" : "people"}${down ? ` (${down} down)` : ""}${earlier ? ` · ${earlier} earlier` : ""}${d.scan_ok === false ? ` · last scan skipped (${d.reject_reason})` : ""}${d.slam_error ? " · " + d.slam_error : ""}`;
+  $("plan-t").title = $("plan-t").textContent;
   drawPlan();
 }
 async function planPost(url, body) {
@@ -734,26 +851,86 @@ async function planPost(url, body) {
   refreshPlan();
 }
 document.querySelectorAll("#plan-tools button[data-node]").forEach((b) => b.addEventListener("click", () => planPost(`/api/map/node/${b.dataset.node}`, { here: true })));
-$("plan-reset").addEventListener("click", () => { if (confirm("Start a new map? Relay positions are kept.")) { PLAN.resetView = true; PLAN.view = null; planPost("/api/map/reset"); } });
+$("plan-reset").addEventListener("click", () => { if (confirm("Start a new map and clear relay positions?")) { PLAN.manualView = null; PLAN.view = null; planPost("/api/map/reset"); } });
+$("plan-fit").addEventListener("click", () => { PLAN.manualView = null; PLAN.view = null; drawPlan(); });
+$("plan-labels").addEventListener("click", () => {
+  PLAN.labels = !PLAN.labels;
+  $("plan-labels").setAttribute("aria-pressed", String(PLAN.labels));
+  $("plan-labels").classList.toggle("active", PLAN.labels);
+  drawPlan();
+});
+$("plan-raw").addEventListener("click", () => {
+  if (!PLAN.data) return;
+  PLAN.rawScan = !showRawPlan(PLAN.data);
+  drawPlan();
+});
+function manualPlanView(cx, cy, scale) {
+  const c = $("plan"), w = Math.max(1, c.clientWidth - 24) / scale, h = Math.max(1, c.clientHeight - 24) / scale;
+  PLAN.manualView = { x0: cx - w / 2, x1: cx + w / 2, y0: cy - h / 2, y1: cy + h / 2 };
+}
+function planPointer(e) {
+  const r = $("plan").getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+}
+function personAt(x, y) {
+  if (!PLAN.data || !PLAN.toScreen) return null;
+  let found = null, distance = 15;
+  for (const person of PLAN.data.persons) {
+    if (!Number.isFinite(person.x) || !Number.isFinite(person.y)) continue;
+    const [X, Y] = PLAN.toScreen(person.x, person.y), d = Math.hypot(X - x, Y - y);
+    if (d < distance) { found = String(person.id); distance = d; }
+  }
+  return found;
+}
+$("plan").addEventListener("wheel", (e) => {
+  if (!PLAN.toMap || PLAN.drag || PLAN.pan) return;
+  e.preventDefault();
+  const [x, y] = planPointer(e), [mx, my] = PLAN.toMap(x, y), c = $("plan");
+  const scale = Math.max(4, Math.min(1600, PLAN.scale * Math.exp(-Math.max(-300, Math.min(300, e.deltaY)) * .002)));
+  manualPlanView(mx - (x - c.clientWidth / 2) / scale, my + (y - c.clientHeight / 2) / scale, scale);
+  drawPlan();
+}, { passive: false });
 $("plan").addEventListener("pointerdown", (e) => {
-  const d = PLAN.data; if (!d || !PLAN.toScreen) return;
-  const r = $("plan").getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const d = PLAN.data; if (e.button !== 0 || !d || !PLAN.toScreen) return;
+  const [x, y] = planPointer(e);
+  PLAN.start = [x, y]; PLAN.dragMoved = false;
+  $("plan").setPointerCapture(e.pointerId);
   for (const id of CHAIN) {
     const n = d.nodes[id]; if (!n) continue;
     const [X, Y] = PLAN.toScreen(n.x, n.y);
-    if (Math.hypot(X - x, Y - y) < 20) { PLAN.drag = id; PLAN.dragPos = [n.x, n.y]; $("plan").setPointerCapture(e.pointerId); return; }
+    if (Math.hypot(X - x, Y - y) < 16) { PLAN.drag = id; PLAN.dragPos = [n.x, n.y]; return; }
   }
+  PLAN.pan = { center: [(PLAN.view.x0 + PLAN.view.x1) / 2, (PLAN.view.y0 + PLAN.view.y1) / 2], scale: PLAN.scale };
+  $("plan").style.cursor = "grabbing";
 });
 $("plan").addEventListener("pointermove", (e) => {
-  if (!PLAN.drag) return;
-  const r = $("plan").getBoundingClientRect();
-  PLAN.dragPos = PLAN.toMap(e.clientX - r.left, e.clientY - r.top); drawPlan();
+  const [x, y] = planPointer(e);
+  if (!PLAN.drag && !PLAN.pan) {
+    const person = personAt(x, y);
+    if (person !== PLAN.highlight) highlightPerson(person);
+    return;
+  }
+  const dx = x - PLAN.start[0], dy = y - PLAN.start[1];
+  if (Math.hypot(dx, dy) < 3 && !PLAN.dragMoved) return;
+  PLAN.dragMoved = true;
+  if (PLAN.drag) PLAN.dragPos = PLAN.toMap(x, y);
+  else manualPlanView(PLAN.pan.center[0] - dx / PLAN.pan.scale, PLAN.pan.center[1] + dy / PLAN.pan.scale, PLAN.pan.scale);
+  drawPlan();
 });
-$("plan").addEventListener("pointerup", () => {
-  if (!PLAN.drag) return;
-  const id = PLAN.drag, [x, y] = PLAN.dragPos; PLAN.drag = null;
-  planPost(`/api/map/node/${id}`, { x, y });
-});
+function finishPlanPointer(e, cancel = false) {
+  if (!PLAN.drag && !PLAN.pan) return;
+  const id = PLAN.drag, position = PLAN.dragPos, moved = PLAN.dragMoved;
+  PLAN.drag = null; PLAN.dragPos = null; PLAN.pan = null;
+  $("plan").style.cursor = "grab";
+  if ($("plan").hasPointerCapture(e.pointerId)) $("plan").releasePointerCapture(e.pointerId);
+  if (!cancel && id && moved) planPost(`/api/map/node/${id}`, { x: position[0], y: position[1] });
+  else if (!cancel && !moved) highlightPerson(personAt(...planPointer(e)), true);
+  drawPlan();
+}
+$("plan").addEventListener("pointerup", (e) => finishPlanPointer(e));
+$("plan").addEventListener("pointercancel", (e) => finishPlanPointer(e, true));
+$("plan").addEventListener("lostpointercapture", (e) => finishPlanPointer(e, true));
+if (window.ResizeObserver) new ResizeObserver(drawPlan).observe($("planwrap"));
 window.addEventListener("resize", drawPlan);
 refreshPlan();
 setInterval(refreshPlan, 500);
