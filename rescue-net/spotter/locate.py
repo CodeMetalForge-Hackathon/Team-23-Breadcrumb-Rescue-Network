@@ -77,7 +77,10 @@ def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0, tilt_deg=None):
     hfov, yaw, direction = float(cfg[hfov_k]), float(cfg[yaw_k]), int(cfg[dir_k])
     u = (det.x0 + det.x1) / 2
     b = bearing(u, hfov, yaw, direction)
-    r_l = lidar_range(scan, b, cfg["lidar_win_deg"], cfg["lidar_min_m"])
+    # LiDAR window: +-lidar_win_deg, or the middle half of the box's angular width if that is wider (a person
+    # close to the rig spans 20+ deg; +-3 deg around the box centre can miss them and hit the wall behind)
+    span = abs(angdiff(bearing(det.x1, hfov, yaw, direction), bearing(det.x0, hfov, yaw, direction)))
+    r_l = lidar_range(scan, b, max(float(cfg["lidar_win_deg"]), span / 4), cfg["lidar_min_m"])
     r_down = size_range(det, hfov, aspect_hw, "D")
     r_up = size_range(det, hfov, aspect_hw, "U")
     if r_l is not None and tilt_deg is not None and tilt_deg > _cfg(cfg, "lidar_max_tilt_deg", 10.0):

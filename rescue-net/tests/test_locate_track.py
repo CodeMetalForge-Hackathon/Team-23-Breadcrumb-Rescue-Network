@@ -412,3 +412,18 @@ def test_lit_scene_drops_thermal_only_in_camera_view_and_far_pairs_split():
     for i in range(4):
         tr2.update([], [ob(9, r=2.6, src="T")], i * 0.1)
     assert [t.src(0.3) for t in tr2.tracks] == ["T"]          # dark: thermal-only counts
+
+
+def test_close_person_one_track_whatever_the_window_hits():
+    tr = Tracker()
+    for i in range(6):                                  # RGB and thermal boxes 2 deg apart: one hits the person,
+        near, far = ob(11, r=0.7), ob(9, r=2.6, src="T")    # the other the wall behind
+        tr.update([near] if i % 2 else [], [far] if i % 2 == 0 else [far], i * 0.1)
+        tr.update([near], [far], i * 0.1 + 0.05)
+    assert len([t for t in tr.tracks if t.last_seen == 0.55]) == 1 and tr.tracks[-1].r == pytest.approx(0.7, abs=0.1)
+
+
+def test_lidar_window_covers_a_close_wide_box():
+    d = det(0.55, 0.0, 0.95, 1.0)                        # someone close, right of centre, 20+ deg wide
+    s = scan_with([(14, 26, 0.7)], wall_m=2.6)
+    assert observe(d, "C", s, cfg()).r == pytest.approx(0.7, abs=0.05)

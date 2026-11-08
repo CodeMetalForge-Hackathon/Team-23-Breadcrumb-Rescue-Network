@@ -33,6 +33,21 @@ def dedupe_obs(obs, deg=4.0, m=0.5):
     return out
 
 
+def merge_close(obs, deg=5.0):
+    """Observations within deg of each other in one frame are one person, whatever their ranges: keep the
+    nearer range (someone close to the rig hides anything behind them at that bearing)."""
+    out = []
+    for o in sorted(obs, key=lambda o: (o.r is None, o.r if o.r is not None else 0.0)):
+        k = next((i for i, x in enumerate(out) if abs(angdiff(o.b, x.b)) <= deg), None)
+        if k is None:
+            out.append(o)
+        elif o.src != out[k].src and "CT" not in (o.src, out[k].src):
+            x = out[k]
+            out[k] = x._replace(src="CT", c=max(x.c, o.c), ps=x.ps if o.ps in (None, "?", x.ps) else
+                                o.ps if x.ps in (None, "?") else "?")
+    return out
+
+
 def pair_cameras(cam_obs, th_obs, merge_deg, max_dr=1.0):
     """Pi-camera and thermal observations of the same person (bearings within merge_deg) -> one "CT" obs."""
     pairs = sorted((abs(angdiff(c.b, t.b)), i, j) for i, c in enumerate(cam_obs) for j, t in enumerate(th_obs))
@@ -129,6 +144,7 @@ class Tracker:
         # reflection (glossy whiteboards and windows mirror long-wave IR); in the dark thermal-only counts
         if self.lit and self.cam_fov:
             obs = [o for o in obs if not (o.src == "T" and abs(angdiff(o.b, self.cam_fov[0])) <= self.cam_fov[1])]
+        obs = merge_close(obs)
         cand = []
         for ti, t in enumerate(self.tracks):
             for oi, o in enumerate(obs):
