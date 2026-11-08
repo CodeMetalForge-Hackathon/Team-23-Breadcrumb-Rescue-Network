@@ -11,9 +11,12 @@ from urllib.parse import urlsplit
 
 import numpy as np
 
+from spotter.posture import posture
+
 log = logging.getLogger("debugview")
 
 W, H = 640, 480
+SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)]
 COLORS = {"confirmed": (0, 220, 0), "uncertain": (0, 220, 255), "rejected": (0, 0, 255)}   # BGR
 HEAT_COLOR = (0, 140, 255)
 PAGE = b"""<!doctype html><title>Spotter debug</title>
@@ -99,8 +102,16 @@ class DebugView:
             d, color = p.det, COLORS[p.decision]
             x0, y0, x1, y1 = int(d.x0 * w), int(d.y0 * h), int(d.x1 * w), int(d.y1 * h)
             cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
-            dt = "dt ?" if p.dt is None else f"dt{p.dt:+.1f}"
-            label = f"{d.score:.2f} {dt}" + (" REJECTED" if p.decision == "rejected" else "")
+            kpts = getattr(d, "kpts", None)
+            if kpts is not None:                      # pose model: draw the skeleton
+                for i, j in SKELETON:
+                    if kpts[i][2] >= 0.5 and kpts[j][2] >= 0.5:
+                        cv2.line(img, (int(kpts[i][0] * w), int(kpts[i][1] * h)),
+                                 (int(kpts[j][0] * w), int(kpts[j][1] * h)), (255, 255, 0), 2)
+            ps = posture(d, cfg)
+            dt = "" if p.dt is None else f" dt{p.dt:+.1f}"
+            label = f"{d.score:.2f}{dt}" + {"D": " DOWN", "U": " up"}.get(ps, "") + \
+                (" REJECTED" if p.decision == "rejected" else "")
             _text(cv2, img, label, (x0 + 2, max(y0 - 6, 14)), color)
 
         for b in analysis.blobs:

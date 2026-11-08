@@ -151,3 +151,26 @@ def test_any_grid_size():
     assert {"t": "PERSON", "c": 90, "th": 1, "v": "C", "dt": 9} in a.candidates
     assert {"t": "HEAT", "c": 40, "v": "R", "dt": 8} in a.candidates
     assert cam_to_cell(0.5, 0.5, cfg(), (120, 160)) == (80.0, 60.0)
+
+
+# ---- posture (added for the no-thermal build) ----
+def test_posture_from_keypoints_and_box():
+    import numpy as np
+    from spotter.detector import PoseDetection
+    from spotter.posture import posture
+    c = {"down_angle_deg": 55, "down_aspect": 1.3}
+    k = np.zeros((17, 3))
+    k[[5, 6, 11, 12], 2] = 0.9
+    k[[5, 6], :2] = [[0.48, 0.30], [0.52, 0.30]]          # shoulders above hips: standing
+    k[[11, 12], :2] = [[0.48, 0.55], [0.52, 0.55]]
+    assert posture(PoseDetection("person", 0.9, 0.4, 0.2, 0.6, 0.9, k), c) == "U"
+    k[[11, 12], :2] = [[0.68, 0.32], [0.68, 0.36]]        # hips beside the shoulders: lying
+    assert posture(PoseDetection("person", 0.9, 0.3, 0.2, 0.8, 0.5, k), c) == "D"
+    wide = person(0.1, 0.6, 0.6, 0.8)                     # no keypoints: falls back to box shape
+    assert posture(wide, c) == "D"
+    assert posture(person(0.45, 0.2, 0.55, 0.9), c) == "U"
+
+
+def test_no_thermal_person_has_no_th():
+    a = analyze([person(0.4, 0.3, 0.6, 0.7, 0.9)], None, cfg())
+    assert a.candidates[0]["t"] == "PERSON" and "th" in a.candidates[0] and a.candidates[0]["th"] is None

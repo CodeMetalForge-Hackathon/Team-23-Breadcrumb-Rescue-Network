@@ -31,6 +31,13 @@ ACK_DEFAULT = "Help is on the way"
 STATIC = Path(__file__).resolve().parent / "static"
 
 
+def priority(a):
+    """Unhandled SOS first, then a person on the ground, then everything else (newest first within each)."""
+    if a.get("t") == "SOS":
+        return 2
+    return 1 if a.get("t") == "PERSON" and a.get("ps") == "D" else 0
+
+
 class State:
     def __init__(self):
         self.lock = threading.Lock()
@@ -77,7 +84,8 @@ class State:
             if t in FOLD_TYPES:
                 for a in reversed(self.alerts):
                     if (not a["handled"] and a.get("t") == t and a.get("src") == msg.get("src")
-                            and a.get("z") == msg.get("z") and now - a["rx"] < FOLD_S):
+                            and a.get("z") == msg.get("z") and a.get("ps") == msg.get("ps")
+                            and now - a["rx"] < FOLD_S):
                         reps, first, key = a.get("reps", 1) + 1, a.get("first", a["rx"]), a["key"]
                         a.clear()
                         a.update({**msg, "key": key, "rx": now, "handled": False,
@@ -124,7 +132,7 @@ class State:
                 age = None if seen is None else now - seen
                 health = "grey" if age is None or age >= AMBER_S else ("green" if age < GREEN_S else "amber")
                 nodes[name] = {"last_seen": seen, "age": age, "health": health}
-            alerts = sorted(self.alerts, key=lambda a: (a["handled"], -a["rx"]))
+            alerts = sorted(self.alerts, key=lambda a: (a["handled"], -priority(a), -a["rx"]))
             return {"now": now, "nodes": nodes, "alerts": alerts, "serial_connected": self.connected,
                     "source": self.source, "stats": dict(self.stats), "can_send": self.sender is not None}
 

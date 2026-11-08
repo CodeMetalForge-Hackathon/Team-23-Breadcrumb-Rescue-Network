@@ -9,13 +9,14 @@ log = logging.getLogger("config")
 DEFAULT_PATH = Path(__file__).resolve().parent / "config.json"
 
 DEFAULTS = {
-    "src": "SP1", "zone": "B3", "ttl": 4,
+    "src": "SP1", "zone": "B2", "ttl": 4,
     "model_path": "", "det_min_score": 0.5,
     "flip_h": False, "flip_v": False, "scale_x": 1.0, "scale_y": 1.0, "offset_x": 0.0, "offset_y": 0.0,
     "person_min_dt": 5.0, "reject_max_dt": 2.0,
     "heat_min_dt": 5.0, "heat_min_pixels": 3, "heat_conf": 40,
     "cooldown_s": 10, "hb_interval_s": 15,
     "serial_port": "", "baud": 115200, "debug_port": 8080,
+    "down_angle_deg": 55, "down_aspect": 1.3,      # posture: torso this far from vertical (or box this wide) = on the ground
 }
 
 

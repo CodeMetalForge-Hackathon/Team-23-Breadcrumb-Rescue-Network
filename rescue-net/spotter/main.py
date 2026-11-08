@@ -20,6 +20,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Rescue Net spotter")
     p.add_argument("--mock", action="store_true", help="fake camera + fake thermal (runs on a laptop)")
     p.add_argument("--mock-thermal", action="store_true", help="real camera + fake thermal")
+    p.add_argument("--no-thermal", action="store_true", help="no thermal camera (this build): camera + pose only")
     p.add_argument("--out", choices=["serial", "stdout"], default="serial")
     p.add_argument("--port", help="serial port of the ESP32 (default: config serial_port, else auto-detect)")
     p.add_argument("--no-debugview", action="store_true")
@@ -30,9 +31,12 @@ def parse_args():
 
 def build_sources(args, cfg):
     from spotter.detector import HailoDetector, MockDetector
-    from spotter.thermal import MLX90640Source, MockThermal
+    from spotter.thermal import MLX90640Source, MockThermal, NoThermal
     detector = MockDetector() if args.mock else HailoDetector(cfg)
-    thermal = MockThermal(detector) if (args.mock or args.mock_thermal) else MLX90640Source()
+    if args.no_thermal:
+        thermal = NoThermal()
+    else:
+        thermal = MockThermal(detector) if (args.mock or args.mock_thermal) else MLX90640Source()
     return detector, thermal
 
 
@@ -93,15 +97,16 @@ def main():
 
             best = {}                              # strongest candidate per (type, view) this frame
             for cand in analysis.candidates:
-                key = (cand["t"], cand["v"])
+                key = (cand["t"], cand["v"], cand.get("ps", ""))   # going down fires at once, not after the cooldown
                 if key not in best or cand["c"] > best[key]["c"]:
                     best[key] = cand
             debouncer.cooldown_s = cfg["cooldown_s"]
             for key in debouncer.update(best, now):
                 c = best[key]
                 outbox.append(make_msg(c["t"], cfg["src"], cfg["ttl"], c=c["c"], th=c.get("th"),
-                                       z=cfg["zone"], v=c["v"], dt=c["dt"]))
-                log.info("ALERT %s view=%s c=%d th=%s dt=%s", c["t"], c["v"], c["c"], c.get("th", "-"), c["dt"])
+                                       z=cfg["zone"], v=c["v"], dt=c["dt"], ps=c.get("ps") or None))
+                log.info("ALERT %s view=%s c=%d th=%s dt=%s ps=%s", c["t"], c["v"], c["c"], c.get("th", "-"),
+                         c["dt"], c.get("ps") or "-")
 
             if last_hb is None or now - last_hb >= cfg["hb_interval_s"]:
                 outbox.append(make_msg("HB", cfg["src"], cfg["ttl"], z=cfg["zone"]))

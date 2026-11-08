@@ -42,6 +42,19 @@ class ThermalSource:
         raise NotImplementedError
 
 
+class NoThermal:
+    """No thermal camera on this build: latest() is always None, so PERSON alerts carry no th/dt."""
+
+    def start(self):
+        return self
+
+    def stop(self):
+        pass
+
+    def latest(self):
+        return None
+
+
 class MockThermal(ThermalSource):
     """Room at ~22 °C, a ~31 °C body that follows MockDetector's true person box
     (with a lukewarm phase to exercise th=0), and a radiator that comes and goes (HEAT)."""

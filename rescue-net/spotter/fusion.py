@@ -7,6 +7,8 @@ from collections import deque, namedtuple
 
 import numpy as np
 
+from spotter.posture import posture
+
 ROWS, COLS = 24, 32          # MLX90640 default, only used when no frame shape is given
 
 HeatBlob = namedtuple("HeatBlob", "u v tu tv dt pixels")
@@ -145,10 +147,15 @@ def analyze(dets, thermal, cfg, recent_dets=()):
         persons.append(Person(det, decision, dt))
         if decision == "rejected":
             continue
-        candidates.append({
-            "t": "PERSON", "c": round(det.score * 100), "th": 1 if decision == "confirmed" else 0,
+        cand = {
+            "t": "PERSON", "c": round(det.score * 100),
+            "th": None if thermal is None else (1 if decision == "confirmed" else 0),   # no thermal camera: no th
             "v": view_of((det.x0 + det.x1) / 2), "dt": None if dt is None else round(dt),
-        })
+        }
+        ps = posture(det, cfg)
+        if ps:
+            cand["ps"] = ps                        # "D" on the ground / "U" upright
+        candidates.append(cand)
 
     blobs, ambient = [], None
     if thermal is not None:

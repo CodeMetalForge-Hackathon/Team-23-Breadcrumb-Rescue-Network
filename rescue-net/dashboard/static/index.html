@@ -103,6 +103,7 @@ h2 { margin: 0 0 10px; font-size: 22px; text-transform: uppercase; letter-spacin
 .card .route { font-family: ui-monospace, Menlo, Consolas, monospace; flex: 1; }
 .card.handled { opacity: .45; filter: grayscale(1); }
 .card.acked { opacity: .8; filter: none; }
+.card.person.down { --c: var(--sos); }
 .card .bad-t { color: var(--sos); font-weight: 800; }
 .card .near { color: var(--sos); font-weight: 800; animation: blink 1s step-end infinite; }
 @keyframes blink { 50% { opacity: .35; } }
@@ -161,7 +162,7 @@ const TYPE_ORDER = ["SOS", "PERSON", "PHONE", "HEAT", "HAZARD"];
 const TYPE_CLASS = { SOS: "sos", PERSON: "person", PHONE: "phone", HEAT: "heat", HAZARD: "hazard" };
 const VIEW = { L: "left of view", C: "centre of view", R: "right of view" };
 const SHOWN_KEYS = new Set(["id", "src", "ttl", "rt", "t", "z", "key", "rx", "handled", "msg", "_rssi",
-                            "q", "p", "inj", "nr", "reps", "first", "acked", "ack_msg"]);
+                            "q", "p", "inj", "nr", "ps", "reps", "first", "acked", "ack_msg"]);
 const INJURY = { 0: "no one hurt", 1: "hurt, can move", 2: "TRAPPED / can't move" };
 const HIGHLIGHT_MS = 3000;
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -263,8 +264,9 @@ function describe(a) {
       };
     case "PERSON":
       return {
-        main: `Person detected${a.c != null ? ` · ${a.c}%` : ""}`,
-        details: [a.th === 1 ? el("span", "yes", "thermal confirmed") : a.th === 0 ? el("span", "no", "thermal not confirmed") : null,
+        main: `${a.ps === "D" ? "Person on the ground" : "Person detected"}${a.c != null ? ` · ${a.c}%` : ""}`,
+        details: [a.ps === "D" ? el("span", "bad-t", "lying down, possible casualty") : a.ps === "U" ? "upright" : null,
+                  a.th === 1 ? el("span", "yes", "thermal confirmed") : a.th === 0 ? el("span", "no", "thermal not confirmed") : null,
                   a.th != null ? deg(a.dt) : null, VIEW[a.v]],
       };
     case "PHONE": {
@@ -288,7 +290,7 @@ function describe(a) {
 }
 
 function buildCard(a, fresh) {
-  const card = el("article", `card ${TYPE_CLASS[a.t] || "other"}${a.handled ? " handled" : ""}${a.acked ? " acked" : ""}${fresh ? " fresh" : ""}`);
+  const card = el("article", `card ${TYPE_CLASS[a.t] || "other"}${a.ps === "D" ? " down" : ""}${a.handled ? " handled" : ""}${a.acked ? " acked" : ""}${fresh ? " fresh" : ""}`);
   const top = el("div", "top");
   top.appendChild(el("span", "badge", a.t || "?"));
   if (zone(a)) top.appendChild(el("span", "zone-t", `Zone ${a.z}`));
