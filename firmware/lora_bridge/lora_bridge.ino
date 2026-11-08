@@ -9,6 +9,12 @@
 // Serial out : {"sent":"<id>"} after each send, {"lora_rx":<json>,"rssi":-57} for anything heard
 //              (ACKs coming back later), {"err":"..."} on bad input.
 // Without a Pi: sends a HB every 15 s so B2 can show the LoRa link is alive.
+//   That filler HB carries SP1's own view of the USB link (it travels by LoRa, so it arrives even when USB is stuck):
+//   "u" USB host connected (DTR), "rx" bytes received from the Pi since boot, "ag" seconds since the last byte
+//   (-1 = never), "up" uptime in s.
+// USB self-heal: if the Pi has talked since boot and then nothing arrives for 40 s (the Pi sends a HB every 15 s),
+//   the USB serial is assumed stuck and the board reboots; the Pi's sink reconnects by itself in a few seconds.
+//   Seen 2026-11-07: the USB link went dead in both directions twice (18:08 and 19:53 EST) while the loop kept running.
 
 #include <SPI.h>
 #include <RH_RF95.h>
@@ -25,12 +31,15 @@ static const char* SRC = "SP1";
 static const int DEFAULT_TTL = 4;
 static const uint32_t HEARTBEAT_MS = 15000;
 static const int MAX_LEN = 250;
+static const uint32_t USB_STUCK_MS = 40000;
 
 RH_RF95 rf95(PIN_RFM_CS, PIN_RFM_DIO0);
 
 static char line[MAX_LEN + 2];
 static int lineLen = 0;
 static uint32_t lastHb = 0;
+static uint32_t rxBytes = 0, lastRxMs = 0;
+static bool piSeen = false;
 
 static void randomId(char* out) {
   static const char hex[] = "0123456789abcdef";
@@ -87,14 +96,19 @@ void setup() {
     }
   }
   rf95.setTxPower(LORA_TX_DBM, false);
+  rp2040.wdt_begin(8000);   // hardware watchdog: a hung loop (e.g. stuck in waitPacketSent) reboots the board
   Serial.printf("{\"boot\":\"%s\",\"freq\":%.1f,\"dbm\":%d}\n", SRC, LORA_FREQ, LORA_TX_DBM);
   lastHb = millis() - HEARTBEAT_MS + 3000;
 }
 
 void loop() {
+  rp2040.wdt_reset();
   // 1. serial lines from the Pi
   while (Serial.available()) {
     char c = Serial.read();
+    rxBytes++;
+    lastRxMs = millis();
+    piSeen = true;
     if (c == '\n') {
       line[lineLen] = 0;
       handleLine(line);
@@ -115,11 +129,26 @@ void loop() {
     }
   }
 
-  // 3. filler heartbeat
+  // 3. filler heartbeat, with SP1's view of the USB link
   if (millis() - lastHb >= HEARTBEAT_MS) {
     lastHb = millis();
     JsonDocument hb;
     hb["t"] = "HB";
+    hb["u"] = Serial ? 1 : 0;
+    hb["rx"] = rxBytes;
+    hb["ag"] = piSeen ? (long)((millis() - lastRxMs) / 1000) : -1L;
+    hb["up"] = millis() / 1000;
     sendDoc(hb);
+  }
+
+  // 4. USB self-heal
+  if (piSeen && millis() - lastRxMs > USB_STUCK_MS) {
+    JsonDocument hb;              // last word over LoRa so BASE logs why SP1 rebooted
+    hb["t"] = "HB";
+    hb["rb"] = "usb";
+    hb["rx"] = rxBytes;
+    sendDoc(hb);
+    delay(50);
+    rp2040.reboot();
   }
 }
