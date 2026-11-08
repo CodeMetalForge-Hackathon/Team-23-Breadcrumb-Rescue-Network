@@ -28,8 +28,10 @@ except Exception as e:                          # mapping not deployed yet: live
     log.info("no SLAM (%s)", e)
 try:
     from mapping.relay import suggest_relays
+    import inspect
+    _RELAY_KW = set(inspect.signature(suggest_relays).parameters) & {"walls", "measured"}
 except Exception:
-    suggest_relays = None
+    suggest_relays, _RELAY_KW = None, set()
 try:
     from mapping.floorplan import extract as extract_walls   # vector floor plan (claude_03): walls as segments
 except Exception:
@@ -44,6 +46,8 @@ PERSON_TTL = 180          # s a person stays on the map after the last sighting
 MERGE_M, MERGE_IDLE = 0.8, 1.0   # a new track id this close to a person not updated for this long = same person
 PNG_EVERY = 1.0           # s between map image renders
 RELAY_EVERY = 3.0
+RSSI_NODE = "B2"          # the spotter's Wi-Fi RSSI (bulk meta "rssi") is measured to B2's RESCUE-LINK AP
+RSSI_STEP_M, RSSI_EVERY = 0.2, 2.0   # keep a sample after this much movement or time (RSSI refreshes every 2 s)
 WALLS_EVERY = 2.0
 NODE_IDS = ["B2", "B1", "BASE"]
 LUT = np.full(256, 22, np.uint8)               # unknown -> near background
@@ -91,6 +95,8 @@ class MapState:
         self.scans, self.last_scan, self.hz = 0, None, 0.0
         self.scan_ok, self.reject_reason = True, None
         self.link = {}                       # lvl, rssi, tilt from the last meta
+        self.rssi_samples = []               # (x, y, rssi dBm, node) along the walk: measured link to RSSI_NODE
+        self._rssi_t = 0.0
         self.cloud = None
         if Cloud is not None:
             try:
@@ -166,6 +172,16 @@ class MapState:
         now = time.time() if now is None else now
         with self.lock:
             self.link = {k: m.get(k) for k in ("lvl", "rssi", "tilt") if k in m}
+            rssi = m.get("rssi")
+            if rssi is not None and self.slam is not None and not self.paused and self.scan_ok:
+                x, y = round(self.pose[0], 2), round(self.pose[1], 2)
+                last = self.rssi_samples[-1] if self.rssi_samples else None
+                if (last is None or math.hypot(x - last[0], y - last[1]) >= RSSI_STEP_M
+                        or now - self._rssi_t >= RSSI_EVERY):
+                    self.rssi_samples.append((x, y, float(rssi), RSSI_NODE))
+                    self._rssi_t = now
+                    if len(self.rssi_samples) > 4000:
+                        self.rssi_samples = self.rssi_samples[::2]
         for p in m.get("persons") or []:
             self.add_person(p.get("id"), p.get("b"), p.get("r"), ps=p.get("ps"), src=p.get("src"),
                             c=p.get("c"), rs=p.get("rs"), kp=p.get("kp"), via="bulk", now=now)
@@ -240,6 +256,7 @@ class MapState:
             self.pose, self.path, self.scan, self.persons, self.relays = (0.0, 0.0, 0.0), [], [], {}, []
             self.nodes = {}                  # new origin: press D2 on each node again (BASE first, at the start)
             self.png, self.png_info, self.walls = None, None, []
+            self.rssi_samples, self._rssi_t = [], 0.0
             if self.cloud is not None:
                 try:
                     self.cloud.clear()
@@ -280,7 +297,12 @@ class MapState:
             img, origin, res = self.slam.grid()
             nodes = {k: (v["x"], v["y"]) for k, v in self.nodes.items()}
             path = [tuple(p) for p in self.path]
-            out = suggest_relays(img, origin, res, nodes, path) or []
+            kw = {}
+            if "walls" in _RELAY_KW and self.walls:
+                kw["walls"] = [list(w) for w in self.walls]
+            if "measured" in _RELAY_KW and self.rssi_samples:
+                kw["measured"] = list(self.rssi_samples)
+            out = suggest_relays(img, origin, res, nodes, path, **kw) or []
             rel = [r if isinstance(r, dict) else {"x": r[0], "y": r[1], "reason": r[2] if len(r) > 2 else ""}
                    for r in out][:3]
             self.relays = [{"x": round(float(r["x"]), 2), "y": round(float(r["y"]), 2), "reason": str(r.get("reason", ""))}
