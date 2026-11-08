@@ -158,6 +158,7 @@ section.side { overflow-y: auto; }
 h2.sub-h { margin-top: 18px; }
 h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 15px; }
 #rstats { font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 6px; }
+#rstats.stale { color: var(--warn); font-weight: 600; }
 
 @media (max-width: 1500px) {
   header { gap: 9px; }
@@ -626,8 +627,11 @@ async function refreshRemote() {
   const lost = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].lost, 0);
   const ok = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].ok, 0);
   const m = r.meta || {}, LV = ["good", "fair", "poor"];
-  const lvl = m.lvl == null ? "" : ` · link ${LV[m.lvl] || m.lvl}${m.rssi != null ? ` (${Math.round(m.rssi)} dBm)` : ""}${m.lvl > 0 ? ", pictures reduced to keep the map and people flowing" : ""}`;
+  const down = m.age != null && m.age > 5;   // no spotter meta for 5 s: the last level/rssi is stale, not "good"
+  const lvl = m.lvl == null ? "" : down ? ` · LINK DOWN, nothing from the spotter for ${Math.round(m.age)} s`
+    : ` · link ${LV[m.lvl] || m.lvl}${m.rssi != null ? ` (${Math.round(m.rssi)} dBm)` : ""}${m.lvl > 0 ? ", pictures reduced to keep the map and people flowing" : ""}`;
   $("rstats").textContent = `Bulk link ${r.kbps} kbps · ${ok} objects received, ${lost} incomplete${lvl}`;
+  $("rstats").classList.toggle("stale", down);
 }
 refreshRemote();
 setInterval(refreshRemote, 300);
