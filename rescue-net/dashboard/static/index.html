@@ -580,9 +580,11 @@ async function refreshRemote() {
     t.classList.toggle("stale", it.age != null && it.age > 10);
   }
   const li = r.lidar, lt = $("rlidar-t");
-  if (li.mm && li.seq !== remoteSeq.lidar) { remoteSeq.lidar = li.seq; drawLidar(li.mm); }
-  lt.textContent = li.seq == null ? "LiDAR: waiting" : `LiDAR around the spotter (1 m rings) · ${ageText(li.age)}`;
-  lt.classList.toggle("stale", li.age != null && li.age > 10);
+  if ($("view3d").hidden) {            // the 3D view (view3d.js) owns this pane and its caption once it is shown
+    if (li.mm && li.seq !== remoteSeq.lidar) { remoteSeq.lidar = li.seq; drawLidar(li.mm); }
+    lt.textContent = li.seq == null ? "LiDAR: waiting" : `LiDAR around the spotter (1 m rings) · ${ageText(li.age)}`;
+    lt.classList.toggle("stale", li.age != null && li.age > 10);
+  }
   const lost = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].lost, 0);
   const ok = ["camera", "thermal", "lidar"].reduce((a, n) => a + r[n].ok, 0);
   const m = r.meta || {}, LV = ["good", "fair", "poor"];

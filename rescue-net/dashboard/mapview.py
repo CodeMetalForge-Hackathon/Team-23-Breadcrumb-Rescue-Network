@@ -152,7 +152,7 @@ class MapState:
             self.link = {k: m.get(k) for k in ("lvl", "rssi", "tilt") if k in m}
         for p in m.get("persons") or []:
             self.add_person(p.get("id"), p.get("b"), p.get("r"), ps=p.get("ps"), src=p.get("src"),
-                            c=p.get("c"), rs=p.get("rs"), via="bulk", now=now)
+                            c=p.get("c"), rs=p.get("rs"), kp=p.get("kp"), via="bulk", now=now)
 
     def add_alert(self, msg, now=None):
         """PERSON alert over LoRa: k (track id), b (deg), r (decimetres). Placed from the Pi's current pose."""
@@ -163,7 +163,7 @@ class MapState:
                         ps=msg.get("ps"), src=msg.get("s") or ("CT" if msg.get("th") else "C"),
                         c=msg.get("c"), via="lora", now=now)
 
-    def add_person(self, pid, b, r, ps=None, src=None, c=None, rs=None, via="bulk", now=None):
+    def add_person(self, pid, b, r, ps=None, src=None, c=None, rs=None, kp=None, via="bulk", now=None):
         if pid is None or b is None:
             return
         now = time.time() if now is None else now
@@ -171,6 +171,8 @@ class MapState:
             p = self.persons.setdefault(str(pid), {"id": str(pid), "first": now})
             p.update(ps=ps or p.get("ps"), src=src or p.get("src"), c=c if c is not None else p.get("c"),
                      rs=rs, via=via, seen=now, b=b, r=r)
+            if kp is not None:                             # 17 COCO keypoints, % of the box (bulk meta only)
+                p["kp"] = kp
             if r:                                          # unknown range: keep the last known position
                 x, y = sensor_to_map(self.pose, float(b), float(r))
                 p["x"], p["y"] = round(float(x), 2), round(float(y), 2)
@@ -202,6 +204,11 @@ class MapState:
             self.pose, self.path, self.scan, self.persons, self.relays = (0.0, 0.0, 0.0), [], [], {}, []
             self.nodes = {}                  # new origin: press D2 on each node again (BASE first, at the start)
             self.png, self.png_info = None, None
+            if self.cloud is not None:
+                try:
+                    self.cloud.clear()
+                except Exception:
+                    log.exception("cloud.clear")
 
     # ---- outputs ----
     def _render_png(self):
@@ -258,8 +265,10 @@ class MapState:
     def cloud_snapshot(self):
         if self.cloud is None:
             return None
+        now = time.time()
         with self.lock:
-            persons = [dict(p) for p in self.persons.values()]
+            persons = [{**p, "age": round(now - p["seen"], 1)} for p in self.persons.values()
+                       if now - p["seen"] <= PERSON_TTL]
             pose, path = self.pose, list(self.path)
         try:
             return self.cloud.snapshot(persons=persons, pose=pose, path=path, nodes=dict(self.nodes))
