@@ -107,6 +107,9 @@ def main():
             extra = {k: v for k, v in (("meta_fn", meta), ("imu", imu)) if k in params}
             BulkLink(view, cam, lid, period=float(cfg.data.get("bulk_period", 0.25)),
                      gap_s=float(cfg.data.get("bulk_gap", 0.003)), **extra).start()
+            if cfg.data.get("link_watch", True):    # B2 rebooting leaves a stale Wi-Fi association
+                from spotter.linkwatch import LinkWatch
+                LinkWatch(con=cfg.data.get("link_con", "RESCUE-LINK")).start()
     thermal.start()
 
     debouncer = Debouncer(cooldown_s=cfg["cooldown_s"])
