@@ -288,3 +288,12 @@ def test_posture_takes_a_config_object(tmp_path):
     c = Config(tmp_path / "missing.json")                # fusion.analyze passes the Config itself, not a dict
     assert posture(body(0.2, 0.5, 0.7, 0.7, 85), c) == "D"
     assert classify(body(0.0, 0.3, 0.6, 1.0, 65), c, extent_m=1.1)[0] == "?"
+
+
+def test_lidar_body_veto_switch():
+    c = cfg()
+    cut = body(0.0, 0.45, 0.6, 1.0, 65)                  # doubtful D: cut by the image edge, 65 deg
+    b = bearing(0.3, c["cam_hfov"], c["cam_yaw"], c["cam_dir"])
+    scan = (np.full(20, b) + np.linspace(-2, 2, 20), np.full(20, 1500.0))   # a return on the body at 1.5 m
+    assert observe(cut, "C", scan, c).ps == "?"
+    assert observe(cut, "C", scan, {**c, "lidar_body_veto": False}).ps == "D"

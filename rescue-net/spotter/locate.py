@@ -70,7 +70,8 @@ def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0):
     # the LiDAR return is this body (it crosses the scan plane), not the wall behind someone lying below it
     body = r_l is not None and r_down is not None and r_l <= 1.4 * r_down + 0.3
     extent = (det.y1 - det.y0) * 2 * math.tan(math.radians(hfov) / 2) * aspect_hw * r_l if body else None
-    ps, why = classify(det, cfg, x_scale or 1 / aspect_hw, roll_deg, extent, body)
+    # lidar_body_veto off when the rig sits on the floor: its scan plane then hits people lying down too
+    ps, why = classify(det, cfg, x_scale or 1 / aspect_hw, roll_deg, extent, body and cfg["lidar_body_veto"])
     r_s = r_down if ps == "D" else size_range(det, hfov, aspect_hw, "U")
     # LiDAR far behind what the box size says: it is looking past the person (lying below the scan plane)
     if r_l is not None and (r_s is None or r_l <= 1.8 * r_s + 0.5):
