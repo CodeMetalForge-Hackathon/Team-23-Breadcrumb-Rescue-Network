@@ -36,6 +36,7 @@ except Exception as e:
     log.info("no 3D cloud (%s)", e)
 
 PERSON_TTL = 180          # s a person stays on the map after the last sighting
+MERGE_M, MERGE_IDLE = 0.8, 1.0   # a new track id this close to a person not updated for this long = same person
 PNG_EVERY = 1.0           # s between map image renders
 RELAY_EVERY = 3.0
 NODE_IDS = ["B2", "B1", "BASE"]
@@ -167,8 +168,19 @@ class MapState:
         if pid is None or b is None:
             return
         now = time.time() if now is None else now
+        pid = str(pid)
         with self.lock:
-            p = self.persons.setdefault(str(pid), {"id": str(pid), "first": now})
+            if pid not in self.persons and r:              # tracker gave a new id: take over a nearby idle entry
+                x, y = sensor_to_map(self.pose, float(b), float(r))
+                near = [(math.hypot(q["x"] - x, q["y"] - y), k) for k, q in self.persons.items()
+                        if q.get("x") is not None and now - q["seen"] >= MERGE_IDLE]
+                olds = [self.persons.pop(k) for d, k in sorted(near) if d <= MERGE_M]   # all idle duplicates there
+                if olds:
+                    q = olds[0]
+                    q["id"], q["merged"] = pid, sum(o.get("merged", 0) + 1 for o in olds)
+                    q["first"] = min(o["first"] for o in olds)
+                    self.persons[pid] = q
+            p = self.persons.setdefault(pid, {"id": pid, "first": now})
             p.update(ps=ps or p.get("ps"), src=src or p.get("src"), c=c if c is not None else p.get("c"),
                      rs=rs, via=via, seen=now, b=b, r=r)
             if kp is not None:                             # 17 COCO keypoints, % of the box (bulk meta only)
