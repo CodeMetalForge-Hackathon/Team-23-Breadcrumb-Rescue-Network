@@ -79,7 +79,7 @@ The map and the people keep flowing at every level.
 
 ## Known limits
 
-- The LiDAR is mounted about 6° off level, and that tilt is not corrected geometrically. Floor or ceiling returns can show up as walls. Scans taken while the rig is tilted more than 10° are rejected.
+- The LiDAR is mounted about 3° off level (re-mounted from 6°), and that tilt is not corrected geometrically. Floor or ceiling returns can show up as walls. Scans taken while the rig is tilted more than 10° are rejected.
 - SLAM has no loop closure. Long featureless corridors can make it drift.
 - Relay suggestions come from an uncalibrated radio heuristic, not from measured links.
 - The thermal camera gives a relative (AGC) image, not absolute temperature.

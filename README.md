@@ -41,9 +41,13 @@ A responder walks into a building that has no GPS, cell service or Wi-Fi. They c
 | Node button D2 MARK registers B1 / B2 / BASE at the spotter's SLAM pose | verified 2026-11-08 06:17 EST (MARK from B1 and B2 arrived and placed) |
 | "Pause map" while the rig is set down; mapping resumes at the same pose | implemented, unit-tested (`tests/test_mapping_slam.py`) |
 | Bulk-link status shows LINK DOWN after 5 s without spotter data | implemented |
-| Pi Wi-Fi watchdog re-joins RESCUE-LINK after B2 reboots | implemented, unit-tested (`tests/test_linkwatch.py`); live test pending |
+| Pi Wi-Fi watchdog re-joins RESCUE-LINK after B2 reboots | verified 2026-11-08 (re-joined about 12 s after a B2 reboot); unit-tested (`tests/test_linkwatch.py`) |
 | Handheld 2D SLAM floor plan with walked path and people on the map | verified 2026-11-08 05:46-05:53 EST (walk3, live over the bulk link: about 43 m walked, ends 0.46 m from the start, 2628 of 3044 scans accepted, 34 wall segments, 3 people placed by bearing and range) |
 | Walked path coloured by measured Wi-Fi signal to B2 (good at -67 dBm and above, fair down to -77, poor below) | implemented, deployed 2026-11-08 06:27 EST |
+| Fewer false PERSON alerts: no re-alert for a re-found person (within 15° / 60 s); "down" needs a visible torso, no box under 1.0 m, and thermal confirmation while the thermal camera runs; LiDAR range cross-checked against box-size range and not used when the rig tilts more than 10° | implemented, unit-tested (`tests/test_locate_track.py`) |
+| One map dot per person: a new tracker id takes over the nearby old entry; with a tilted rig the last level range is kept, and a first sighting is placed and flagged "range unsure" | implemented, unit-tested (`tests/test_mapview_tilt.py`) |
+| Phones near a relay (BLE halo) and SOS pins drawn at the marked relays on the floor plan: a zone, not a position | implemented |
+| SOS card says "about N m from B1", from the phone's Wi-Fi signal at B1 (d = 10^((-40 - RSSI)/25) m, a rough model, ±6 dB band drawn on the plan) | implemented, B1 flashed 2026-11-08; live test with an iPhone pending |
 | Room-style plan: wall segments extracted from the SLAM grid (denoised, about 70 ms) | implemented, unit-tested (`tests/test_floorplan.py`) |
 | Suggested relay spots on the floor plan, labelled "place relay N" | implemented; calibrating the radio model from measured RSSI along the walk is in progress |
 | 3D point cloud view, with estimated floor and ceiling returns hidden by default (Floor/ceiling toggle) | implemented, unit-tested (`tests/test_cloud_filter.py`, `tests/test_cloud_filter_replay.py`) |

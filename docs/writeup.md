@@ -35,7 +35,8 @@ A responder carries a handheld **spotter**: a Raspberry Pi 5 with an AI accelera
 - **Only two LoRa radios.** That forced the split: LoRa for the first hop out of the spotter, ESP-NOW between relays.
 - **USB links freeze.** The spotter's USB serial to its LoRa bridge went dead twice. The bridge now reboots itself after 40 s of silence, under a hardware watchdog, and the laptop hub reopens stalled serial ports.
 - **Hardware.** The AI HAT's stacking header had been mounted upside down, which cut off every GPIO pin until we found it. A speaker we added was too noisy to use, so we shelved it.
-- **A handheld, tilted LiDAR is a hard SLAM input.** It sits 6° off level, and people walk unevenly. We gate scans on the accelerometer and reject bad matches rather than corrupt the map.
+- **A handheld, tilted LiDAR is a hard SLAM input.** It sat 6° off level (we re-mounted it to about 3°), and people walk unevenly. We gate scans on the accelerometer and reject bad matches rather than corrupt the map.
+- **Monocular depth did not beat simple geometry.** We tried Depth Anything V2 Small, scaled by the LiDAR, to range people. On 25 live observations it read a median 50% too far (median error 1.0 m), while range from the person's box size had a median error of 0.25 m, so we dropped it.
 - **Bandwidth.** Pictures, LiDAR and the map had to share one relay chain, so we prioritized the map and the people and let the images degrade.
 
 ## Accomplishments we're proud of
