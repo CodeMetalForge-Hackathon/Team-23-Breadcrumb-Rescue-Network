@@ -21,7 +21,7 @@ small{color:#aaa}
 .send{display:block;width:100%;margin:10px 0;font-size:1.4em;padding:18px;border:0;border-radius:14px;background:#e53935;color:#fff;font-weight:800}
 .top{margin-top:4px}
 </style></head><body>
-<h1>&#x1F198; Rescue team nearby</h1>
+<h1>Rescue team nearby</h1>
 <p>Tap what fits, then SEND. Skip anything you don't know.</p>
 <form method="POST" action="/sos">
 <button class="send top" type="submit">SEND SOS NOW</button>
@@ -59,7 +59,7 @@ small{color:#aaa}
 
 <div class="q">Where are you? (optional)</div>
 <textarea name="msg" rows="2" maxlength="40" placeholder="e.g. 2nd floor, under stairs"></textarea>
-<small>Can't type? Tap &#x1F3A4; on the keyboard and speak.</small>
+<small>Can't type? Tap the microphone key on the keyboard and speak.</small>
 
 <button class="send" type="submit">SEND SOS</button>
 </form></body></html>)HTML";
@@ -75,7 +75,7 @@ a{color:#8ab4f8;font-size:1.1em}
 body.ok{background:#0d3b1e}
 body.ok #s{font-size:1.4em;font-weight:700;color:#fff}
 </style></head><body>
-<h1 id="h">&#x2705; Message sent</h1>
+<h1 id="h">Message sent</h1>
 <p id="s">Your message is on its way to the rescue team.</p>
 <p id="w" class="wait">Waiting for the rescuers to confirm&hellip;</p>
 <p>Stay where you are if it is safe. Keep this phone on.</p>
@@ -85,7 +85,7 @@ var id="%ID%";
 function poll(){
   fetch("/status?id="+id,{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
     if(d.ack){
-      document.getElementById("h").innerHTML="&#x1F691; Received by rescuers";
+      document.getElementById("h").textContent="Received by rescuers";
       document.getElementById("s").textContent=d.reply||"Help is on the way";
       document.getElementById("w").style.display="none";
       document.body.className="ok";

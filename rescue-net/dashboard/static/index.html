@@ -102,6 +102,14 @@ h2 { margin: 0 0 10px; font-size: 22px; text-transform: uppercase; letter-spacin
 .card .meta { display: flex; align-items: center; gap: 12px; margin-top: 8px; color: var(--muted); font-size: 18px; }
 .card .route { font-family: ui-monospace, Menlo, Consolas, monospace; flex: 1; }
 .card.handled { opacity: .45; filter: grayscale(1); }
+.card.acked { opacity: .8; filter: none; }
+.card .bad-t { color: var(--sos); font-weight: 800; }
+.card .near { color: var(--sos); font-weight: 800; animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+.card .reps { font-weight: 700; }
+.card .acked-t { color: var(--ok); font-weight: 800; }
+button.reply { border-color: var(--ok); color: var(--ok); }
+button.reply:hover { background: var(--ok); color: var(--bg); }
 .card.fresh { animation: flash 1s ease-in-out 3; }
 @keyframes flash { 50% { box-shadow: 0 0 0 5px var(--c); } }
 
@@ -145,15 +153,16 @@ h2 { margin: 0 0 10px; font-size: 22px; text-transform: uppercase; letter-spacin
 // Floor plan, deepest inside the building (left) to the entrance (right). Edit labels here.
 const NODES = [
   { id: "SP1",  label: "Spotter" },
-  { id: "B3",   label: "Stairwell" },
-  { id: "B2",   label: "Hallway" },
-  { id: "B1",   label: "Lobby" },
+  { id: "B2",   label: "Hallway" },     // LoRa gateway + Bluetooth phone scan
+  { id: "B1",   label: "Lobby" },       // relay + rescue Wi-Fi (survivor SOS page)
   { id: "BASE", label: "Entrance" },
 ];
 const TYPE_ORDER = ["SOS", "PERSON", "PHONE", "HEAT", "HAZARD"];
 const TYPE_CLASS = { SOS: "sos", PERSON: "person", PHONE: "phone", HEAT: "heat", HAZARD: "hazard" };
 const VIEW = { L: "left of view", C: "centre of view", R: "right of view" };
-const SHOWN_KEYS = new Set(["id", "src", "ttl", "rt", "t", "z", "key", "rx", "handled", "msg", "_rssi"]);
+const SHOWN_KEYS = new Set(["id", "src", "ttl", "rt", "t", "z", "key", "rx", "handled", "msg", "_rssi",
+                            "q", "p", "inj", "nr", "reps", "first", "acked", "ack_msg"]);
+const INJURY = { 0: "no one hurt", 1: "hurt, can move", 2: "TRAPPED / can't move" };
 const HIGHLIGHT_MS = 3000;
 const SVGNS = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
@@ -177,7 +186,7 @@ function ago(s) {
 }
 
 // ---------- floor plan ----------
-const NX = (i) => 100 + i * 200, NY = 200;
+const NX = (i) => 100 + i * (800 / (NODES.length - 1)), NY = 200;   // spotter far left, BASE outside at 900
 const nodeEls = {};
 
 function buildMap() {
@@ -246,18 +255,24 @@ function extras(a) {
 function describe(a) {
   switch (a.t) {
     case "SOS":
-      return { main: a.msg ? `“${a.msg}”` : "SOS (no message)", details: [] };
+      return {
+        main: a.msg ? `“${a.msg}”` : "SOS (no message)",
+        details: [a.p != null ? (a.p >= 4 ? "4 or more people" : `${a.p} ${a.p === 1 ? "person" : "people"}`) : null,
+                  a.inj != null ? el("span", a.inj > 0 ? "bad-t" : null, INJURY[a.inj] || `injury ${a.inj}`) : null,
+                  a.src === "B1" ? "sent from the rescue Wi-Fi at B1" : null],
+      };
     case "PERSON":
       return {
         main: `Person detected${a.c != null ? ` · ${a.c}%` : ""}`,
-        details: [a.th === 1 ? el("span", "yes", "✓ thermal confirmed") : el("span", "no", "thermal not confirmed"),
-                  deg(a.dt), VIEW[a.v]],
+        details: [a.th === 1 ? el("span", "yes", "thermal confirmed") : a.th === 0 ? el("span", "no", "thermal not confirmed") : null,
+                  a.th != null ? deg(a.dt) : null, VIEW[a.v]],
       };
     case "PHONE": {
       const where = a.z || a.src;
       return {
         main: a.n != null ? `${a.n} device${a.n === 1 ? "" : "s"} near ${where}` : `Phones heard near ${where}`,
-        details: [a.rssi != null ? `strongest ${a.rssi} dBm` : null, a.ap != null ? `${a.ap} Apple` : null],
+        details: [a.nr > 0 ? el("span", "near", `${a.nr === 1 ? "A phone is" : `${a.nr} phones are`} right next to ${where}`) : null,
+                  a.rssi != null ? `strongest ${a.rssi} dBm` : null, a.ap != null ? `${a.ap} Apple` : null],
       };
     }
     case "HEAT":
@@ -273,7 +288,7 @@ function describe(a) {
 }
 
 function buildCard(a, fresh) {
-  const card = el("article", `card ${TYPE_CLASS[a.t] || "other"}${a.handled ? " handled" : ""}${fresh ? " fresh" : ""}`);
+  const card = el("article", `card ${TYPE_CLASS[a.t] || "other"}${a.handled ? " handled" : ""}${a.acked ? " acked" : ""}${fresh ? " fresh" : ""}`);
   const top = el("div", "top");
   top.appendChild(el("span", "badge", a.t || "?"));
   if (zone(a)) top.appendChild(el("span", "zone-t", `Zone ${a.z}`));
@@ -296,7 +311,17 @@ function buildCard(a, fresh) {
   const route = [a.src, ...(Array.isArray(a.rt) ? a.rt : [])].filter(Boolean).join(" → ");
   const rssi = typeof a._rssi === "number" ? `  ·  ${a._rssi} dBm at base` : "";
   meta.appendChild(el("span", "route", `${route}${a.id ? `  ·  #${a.id}` : ""}${rssi}`));
-  if (a.handled) {
+  if (a.reps > 1) meta.appendChild(el("span", "reps", `×${a.reps} since ${fmtTime(a.first)}`));
+  if (a.acked) {
+    meta.appendChild(el("span", "acked-t", `Reply sent to survivor ${fmtTime(a.acked)}`));
+  } else if (a.t === "SOS" && a.id && canSend) {
+    const r = el("button", "reply", "Reply: help is on the way");
+    r.onclick = () => sendAck(a.key, r);
+    meta.appendChild(r);
+  }
+  if (a.acked) {
+    /* reply sent = handled */
+  } else if (a.handled) {
     meta.appendChild(el("span", null, "Handled"));
   } else {
     const b = el("button", null, "Mark handled");
@@ -321,10 +346,12 @@ function renderFeed(alerts) {
   for (const a of alerts) {
     live.add(a.key);
     const c = cards.get(a.key);
-    if (!c || c.handled !== a.handled) {
+    const sig = `${a.handled}|${a.rx}|${a.acked || ""}|${canSend}`;
+    if (!c || c.sig !== sig) {
       const node = buildCard(a, fresh.includes(a));
       if (c) c.el.replaceWith(node);
-      cards.set(a.key, { el: node, handled: a.handled });
+      if (c && c.rx !== a.rx) highlightRoute(a);          // a repeat folded into this card
+      cards.set(a.key, { el: node, sig, rx: a.rx });
     }
   }
   for (const [k, c] of cards) if (!live.has(k)) { c.el.remove(); cards.delete(k); }
@@ -338,6 +365,19 @@ function renderFeed(alerts) {
 
   for (const a of fresh) highlightRoute(a);
   if (fresh.some((a) => a.t === "SOS")) beep();
+}
+
+let canSend = false;
+async function sendAck(key, btn) {
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    const r = await fetch(`/api/ack/${encodeURIComponent(key)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ msg: "Help is on the way" }),
+    });
+    if (!r.ok) { btn.disabled = false; btn.textContent = "Send failed, retry"; return; }
+  } catch (e) { btn.disabled = false; btn.textContent = "Send failed, retry"; return; }
+  refresh();
 }
 
 async function markHandled(key, btn) {
@@ -367,6 +407,7 @@ function renderLink(s) {
   if (s.serial_connected) {
     if (src.startsWith("mock") || src.startsWith("replay")) { p.className = "info"; p.textContent = src.replace(/^./, (c) => c.toUpperCase()); }
     else if (src === "stdin") { p.className = "good"; p.textContent = "● Reading stdin"; }
+    else if (src.startsWith("hub")) { p.className = "good"; p.textContent = `● Live · ${src.replace(/^hub /, "")} via board hub`; }
     else { p.className = "good"; p.textContent = `● Serial connected · ${src}`; }
   } else {
     p.className = "bad";
@@ -418,6 +459,7 @@ try { setTheme(localStorage.getItem("rn-theme") || "dark"); } catch (e) { setThe
 // ---------- polling ----------
 let lastOk = 0, busy = false;
 function render(s) {
+  canSend = !!s.can_send;
   renderLink(s);
   renderNodes(s.nodes);
   renderCounts(s.alerts);
