@@ -19,13 +19,20 @@ W, H = 640, 480
 SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)]
 COLORS = {"confirmed": (0, 220, 0), "uncertain": (0, 220, 255), "rejected": (0, 0, 255)}   # BGR
 HEAT_COLOR = (0, 140, 255)
-PAGE = b"""<!doctype html><title>Spotter debug</title>
+PAGE = b"""<!doctype html><title>Spotter sensors</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <body style="margin:0;background:#111;color:#ddd;font:14px sans-serif">
-<img id="v" src="/stream" style="width:100%;max-width:960px;display:block;margin:auto">
-<p style="text-align:center">green = person + heat &middot; yellow = person, heat unsure &middot;
-red = rejected (no heat) &middot; orange = HEAT blob. Edit spotter/config.json to move the overlay.
-<button onclick="var v=document.getElementById('v');v.src=v.src.indexOf('overlay=0')<0?'/stream?overlay=0':'/stream'">
-toggle thermal overlay</button></p>"""
+<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;padding:8px">
+<figure style="margin:0;flex:1 1 560px;max-width:960px"><img id="v" src="/stream" style="width:100%">
+<figcaption>Camera + pose (green = person, yellow = unsure)
+<button onclick="var v=document.getElementById('v');v.src=v.src.indexOf('overlay=0')<0?'/stream?overlay=0':'/stream'">toggle overlay</button></figcaption></figure>
+<figure style="margin:0;flex:1 1 400px;max-width:640px"><img src="/stream?src=thermal" style="width:100%">
+<figcaption>Thermal camera (bright = warm)</figcaption></figure>
+<figure style="margin:0;flex:1 1 360px;max-width:520px"><img id="l" src="/stream?src=lidar" style="width:100%">
+<figcaption>LiDAR plan view (top-down, 1 m rings, arrow = 0 deg)
+range <select onchange="document.getElementById('l').src='/stream?src=lidar&r='+this.value">
+<option>3</option><option>4</option><option selected>6</option><option>8</option><option>12</option></select> m</figcaption></figure>
+</div>"""
 
 
 class DebugView:
@@ -34,6 +41,7 @@ class DebugView:
         self.cv2 = cv2
         self._lock = threading.Lock()
         self._state = None
+        self.extras = {}                # name -> callable(query) returning a BGR image (thermal, lidar)
         view = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -43,10 +51,12 @@ class DebugView:
             def do_GET(self):
                 url = urlsplit(self.path)
                 overlay = "overlay=0" not in url.query
+                q = dict(kv.split("=", 1) for kv in url.query.split("&") if "=" in kv)
+                render = view.renderer(q.get("src", "rgb"), overlay, q)
                 if url.path == "/":
                     self._send(200, "text/html", PAGE)
                 elif url.path == "/frame.jpg":
-                    self._send(200, "image/jpeg", view.render_jpeg(overlay))
+                    self._send(200, "image/jpeg", render())
                 elif url.path == "/stream":
                     self.send_response(200)
                     self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
@@ -54,7 +64,7 @@ class DebugView:
                     self.end_headers()
                     try:
                         while True:
-                            jpg = view.render_jpeg(overlay)
+                            jpg = render()
                             self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                                              + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n")
                             time.sleep(0.1)
@@ -79,6 +89,13 @@ class DebugView:
         """Called from the detection loop: store references only."""
         with self._lock:
             self._state = (image, analysis, thermal, dict(cfg.data), fps)
+
+    def renderer(self, src, overlay, q):
+        """A no-arg function that renders one JPEG of the requested source."""
+        if src in self.extras:
+            fn = self.extras[src]
+            return lambda: self.cv2.imencode(".jpg", fn(q), [self.cv2.IMWRITE_JPEG_QUALITY, 75])[1].tobytes()
+        return lambda: self.render_jpeg(overlay)
 
     def render_jpeg(self, overlay=True):
         with self._lock:

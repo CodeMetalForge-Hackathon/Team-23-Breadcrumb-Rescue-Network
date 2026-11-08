@@ -32,6 +32,8 @@ ESP_ROM_PID = 0x1001                                   # ESP32-S3 USB-Serial-JTA
 HERE = os.path.dirname(os.path.abspath(__file__))
 LABELS_FILE = os.path.join(HERE, "board_hub_labels.json")
 LOG_DIR = os.path.join(HERE, "board_hub_logs")
+APP_DIR = os.path.join(HERE, "apps", "rescue-net")      # command-post dashboard run by /admin/proc
+DASH = {"proc": None}
 
 
 def norm_key(s):
@@ -108,6 +110,8 @@ class Hub:
             b.seq += 1
             b.lines.append((b.seq, ts, text))
             b.cond.notify_all()
+        if text.startswith("$"):           # bulk-link chunks ($B ...): memory only, too many for the disk log
+            return
         name = self.label_of(b) or b.dev
         with open(os.path.join(LOG_DIR, f"{name}.log"), "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d')} {ts} {text}\n")
@@ -508,6 +512,54 @@ def make_handler(hub, token):
             os.replace(path + ".new", path)
             return self.reply(200, {"ok": True, "name": name, "sha": got})
 
+        def admin_put(self, q, data):
+            """POST /admin/put?path=dashboard/app.py&sha=...: write a file under apps/rescue-net/ (the
+            command-post dashboard that runs on this laptop)."""
+            import hashlib
+            rel = (q.get("path", [""])[0] or "").replace("\\", "/")
+            if not rel or rel.startswith("/") or ".." in rel.split("/"):
+                return self.reply(400, {"ok": False, "error": "bad path"})
+            got = hashlib.sha256(data).hexdigest()
+            if (q.get("sha", [""])[0] or "").lower() != got:
+                return self.reply(400, {"ok": False, "error": "sha mismatch", "got": got})
+            path = os.path.join(APP_DIR, *rel.split("/"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".new", "wb") as f:
+                f.write(data)
+            os.replace(path + ".new", path)
+            return self.reply(200, {"ok": True, "path": rel, "sha": got})
+
+        def admin_proc(self, q, data):
+            """POST /admin/proc?do=start|stop|status|pip : the dashboard process in apps/rescue-net/.
+            body (start) = extra args, one per line. Output goes to apps/dashboard.out."""
+            do = q.get("do", ["status"])[0]
+            if do == "pip":
+                pkgs = [p for p in data.decode().split() if re.fullmatch(r"[A-Za-z0-9_.\-=<>]+", p)]
+                r = subprocess.run([sys.executable, "-m", "pip", "install", "--user", *pkgs],
+                                   capture_output=True, text=True, timeout=300)
+                return self.reply(200, {"ok": r.returncode == 0, "output": (r.stdout + r.stderr)[-3000:]})
+            if do in ("stop", "start") and DASH["proc"] and DASH["proc"].poll() is None:
+                DASH["proc"].terminate()
+                try:
+                    DASH["proc"].wait(10)
+                except subprocess.TimeoutExpired:
+                    DASH["proc"].kill()
+            if do == "start":
+                args = [a for a in data.decode().splitlines() if a.strip()]
+                out = open(os.path.join(HERE, "apps", "dashboard.out"), "w", encoding="utf-8")
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                DASH["proc"] = subprocess.Popen([sys.executable, "-u", "-m", "dashboard.app", *args], cwd=APP_DIR,
+                                                stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
+                time.sleep(3)
+            p = DASH["proc"]
+            tail = ""
+            try:
+                tail = open(os.path.join(HERE, "apps", "dashboard.out"), encoding="utf-8", errors="replace").read()[-2500:]
+            except OSError:
+                pass
+            return self.reply(200, {"ok": True, "output": f"running={p is not None and p.poll() is None} "
+                                    f"rc={None if p is None else p.poll()}\n{tail}"})
+
         def _post(self):
             q = self.check()
             if q is None:
@@ -525,6 +577,10 @@ def make_handler(hub, token):
                 return self.admin_update(q, data)
             if parts == ["admin", "file"]:
                 return self.admin_file(q, data)
+            if parts == ["admin", "put"]:
+                return self.admin_put(q, data)
+            if parts == ["admin", "proc"]:
+                return self.admin_proc(q, data)
             if len(parts) != 2:
                 return self.reply(404, {"error": "unknown path"})
             b = hub.find(parts[1])

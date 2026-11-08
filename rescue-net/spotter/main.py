@@ -24,6 +24,7 @@ def parse_args():
     p.add_argument("--out", choices=["serial", "stdout"], default="serial")
     p.add_argument("--port", help="serial port of the ESP32 (default: config serial_port, else auto-detect)")
     p.add_argument("--no-debugview", action="store_true")
+    p.add_argument("--no-extra-sensors", action="store_true", help="do not show the USB thermal camera / LiDAR in the debug view")
     p.add_argument("--config", default=str(DEFAULT_PATH))
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging (incl. lines the ESP32 prints)")
     return p.parse_args()
@@ -71,6 +72,8 @@ def main():
     detector, thermal = build_sources(args, cfg)
     sink = build_sink(args, cfg)
     view = None if args.no_debugview else debugview.start(cfg["debug_port"])
+    if view is not None and not args.no_extra_sensors:
+        add_extra_views(view)
     thermal.start()
 
     debouncer = Debouncer(cooldown_s=cfg["cooldown_s"])
@@ -131,6 +134,24 @@ def main():
         thermal.stop()
         sink.close()
         log.info("spotter stopped")
+
+
+def add_extra_views(view):
+    """USB thermal camera and RPLIDAR panes in the debug view (display only for now)."""
+    from spotter import ircam, lidar
+    cv2 = view.cv2
+    cam = ircam.IRCamera().start()
+    lid = lidar.Lidar().start()
+    view.extras["thermal"] = lambda q: ircam.render(cv2, cam.latest(), cam.status, cam.fps)
+
+    def lidar_view(q):
+        try:
+            r = min(max(float(q.get("r", 6)), 1.0), 12.0)
+        except ValueError:
+            r = 6.0
+        return lidar.render(cv2, lid.latest(), max_m=r, status=lid.status, hz=lid.scan_hz)
+    view.extras["lidar"] = lidar_view
+    return cam, lid
 
 
 if __name__ == "__main__":
