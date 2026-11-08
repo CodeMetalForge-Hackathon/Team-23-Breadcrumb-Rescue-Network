@@ -65,7 +65,7 @@
     <text x="1080" y="568">walked path, people, relay nodes</text>
     <text x="1080" y="592">Suggested next relay spots</text>
     <text x="1080" y="624">Live panes: camera, thermal, LiDAR</text>
-    <text x="1080" y="648">(3D cloud view in progress)</text>
+    <text x="1080" y="648">3D point cloud view</text>
   </g>
 
   <!-- Survivor phone -->

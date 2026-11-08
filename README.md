@@ -22,9 +22,9 @@ A responder walks into a building that has no GPS, cell service or Wi-Fi. They c
 ## Mentor feedback we designed for
 
 1. **Low light.** Pose detection also runs on the thermal camera. A thermal-only detection still raises a PERSON alert, marked `s:"T"`.
-2. **Environment modelling.** The handheld 2D SLAM builds a floor plan on the dashboard. A 3D point cloud view is being built (see Status).
+2. **Environment modelling.** The handheld 2D SLAM builds a floor plan on the dashboard, drawn as clean wall segments. A 3D point cloud view adds height: pause the map, then nod the rig.
 3. **Node-failure resilience.** Alerts flood through every relay with de-duplication and a hop limit, so they route around a relay that goes silent. The spotter's LoRa bridge (SP1) reboots itself when its USB link stalls, and a hardware watchdog backs that up. The laptop hub reopens a serial port that goes silent.
-4. **Best relay placement.** The planner estimates link margin from the walked path, the distance and the walls on the map. It suggests where the next relay should go. Operators register a real relay by pressing its D2 button while standing next to it, or by dragging it on the map.
+4. **Best relay placement.** The planner estimates link margin from the walked path, the distance and the walls on the map. It suggests where the next relay should go, labelled "place relay N" on the map. Operators register a real relay by pressing its D2 button while standing next to it, or by dragging it on the map.
 
 ## Status (what is verified on hardware)
 
@@ -36,10 +36,17 @@ A responder walks into a building that has no GPS, cell service or Wi-Fi. They c
 | SP1 USB self-heal (reboot after 40 s of silence) and hub serial reopen | verified 2026-11-07/08 |
 | YOLOv8-pose on Hailo-8 (RGB) and on the USB thermal camera | verified 2026-11-07 |
 | Bulk link Pi → B2 → B1 → BASE (about 420 kbps), with camera, thermal and LiDAR panes on the dashboard | verified 2026-11-08 |
-| Auto-degrade of the bulk link on weak Wi-Fi signal | implemented, unit-tested |
-| Handheld 2D SLAM floor plan, people on the map, relay suggestions | _to be confirmed before submission_ |
-| D2 button MARK places the node at the spotter's pose | _to be confirmed before submission_ |
-| 3D point cloud view | _in progress_ |
+| Auto-degrade of the bulk link on weak Wi-Fi signal | implemented, unit-tested (`tests/test_bulklink.py`) |
+| Person-down alert latency: 1.73 s from the start of the fall to the dashboard card (0.73 s from the first "down" frame, of which 0.59 s is transport) | measured 2026-11-08 06:15 EST |
+| Node button D2 MARK registers B1 / B2 / BASE at the spotter's SLAM pose | verified 2026-11-08 06:17 EST (MARK from B1 and B2 arrived and placed) |
+| "Pause map" while the rig is set down; mapping resumes at the same pose | implemented, unit-tested (`tests/test_mapping_slam.py`) |
+| Bulk-link status shows LINK DOWN after 5 s without spotter data | implemented |
+| Pi Wi-Fi watchdog re-joins RESCUE-LINK after B2 reboots | implemented, unit-tested (`tests/test_linkwatch.py`); live test pending |
+| Handheld 2D SLAM floor plan with walked path and people on the map | _to be confirmed before submission_ |
+| Room-style plan: wall segments extracted from the SLAM grid (denoised, about 70 ms) | implemented, unit-tested (`tests/test_floorplan.py`) |
+| Suggested relay spots on the floor plan, labelled "place relay N" | implemented; calibrating the radio model from measured RSSI along the walk is in progress |
+| 3D point cloud view, with estimated floor and ceiling returns hidden by default (Floor/ceiling toggle) | implemented, unit-tested (`tests/test_cloud_filter.py`, `tests/test_cloud_filter_replay.py`) |
+| Nodding the rig while the map is paused adds height to the 3D cloud; scans tilted past 30° are dropped | implemented; live test pending |
 
 ## Hardware
 
