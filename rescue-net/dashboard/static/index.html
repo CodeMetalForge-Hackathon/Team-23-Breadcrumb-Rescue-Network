@@ -225,7 +225,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
       </span>
       <span class="plan-hint">Purple dashed circle = suggested relay spot · scroll to zoom · drag to pan</span>
     </div>
-    <div id="plan-zone-key">Halo = phones heard by that relay (zone, not a position)</div>
+    <div id="plan-zone-key">Halo = phones heard by that relay (zone, not a position)<br>Red band = SOS phone distance from the relay, from its Wi-Fi signal (rough)</div>
     <div id="plan-body">
       <div id="planwrap"><canvas id="plan" aria-label="Floor plan; scroll to zoom, drag empty space to pan or a relay to move it"></canvas></div>
       <aside id="plan-people" aria-label="People on the floor plan">
@@ -265,7 +265,17 @@ const TYPE_ORDER = ["SOS", "PERSON", "PHONE", "HEAT", "HAZARD"];
 const TYPE_CLASS = { SOS: "sos", PERSON: "person", PHONE: "phone", HEAT: "heat", HAZARD: "hazard" };
 const VIEW = { L: "left of view", C: "centre of view", R: "right of view" };
 const SHOWN_KEYS = new Set(["id", "src", "ttl", "rt", "t", "z", "key", "rx", "handled", "msg", "_rssi",
-                            "q", "p", "inj", "nr", "ps", "reps", "first", "acked", "ack_msg"]);
+                            "q", "p", "inj", "nr", "ps", "reps", "first", "acked", "ack_msg", "sr"]);
+// SOS range from one relay: the phone's RSSI at that relay's access point (sr, dBm).
+// d = 10^((-40 - sr) / 25) m, clamped to 0.5..30 m; the band d/1.74..d*1.74 is about +-6 dB.
+// A distance from one relay, not a position.
+function sosRange(sr) {
+  if (typeof sr !== "number" || !Number.isFinite(sr) || sr >= 0 || sr < -150) return null;
+  const d = Math.min(30, Math.max(0.5, 10 ** ((-40 - sr) / 25)));
+  return { d, inner: d / 1.74, outer: d * 1.74, sr: Math.round(sr) };
+}
+const sosMetres = (d) => d < 2.95 ? d.toFixed(1) : String(Math.round(d));
+const sosRangeText = (node, range) => `about ${sosMetres(range.d)} m from ${node} (Wi-Fi signal ${range.sr} dBm)`;
 const INJURY = { 0: "no one hurt", 1: "hurt, can move", 2: "TRAPPED / can't move" };
 const HIGHLIGHT_MS = 3000;
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -359,7 +369,9 @@ function describe(a) {
         main: a.msg ? `“${a.msg}”` : "SOS (no message)",
         details: [a.p != null ? (a.p >= 4 ? "4 or more people" : `${a.p} ${a.p === 1 ? "person" : "people"}`) : null,
                   a.inj != null ? el("span", a.inj > 0 ? "bad-t" : null, INJURY[a.inj] || `injury ${a.inj}`) : null,
-                  a.src === "B1" ? "sent from the rescue Wi-Fi at B1" : null],
+                  a.src === "B1" ? "sent from the rescue Wi-Fi at B1" : null,
+                  typeof a.src === "string" && sosRange(a.sr)
+                    ? sosRangeText(a.src.length > 24 ? a.src.slice(0, 24) + "…" : a.src, sosRange(a.sr)) : null],
       };
     case "PERSON":
       return {
@@ -689,7 +701,11 @@ function planRelayZones(alerts, nodes, nowSeconds) {
       if (!Number.isFinite(a.rx) || !Number.isFinite(nowSeconds) || nowSeconds - a.rx < 0 || nowSeconds - a.rx > 60) continue;
       if (!phones.has(node) || phones.get(node).rx < a.rx) phones.set(node, a);
     } else if (!Number.isFinite(a.acked)) {
-      sos.set(node, (sos.get(node) || 0) + 1); // handled alone does not acknowledge an SOS.
+      // handled alone does not acknowledge an SOS.
+      if (!sos.has(node)) sos.set(node, { count: 0, ranged: [] });
+      const entry = sos.get(node), range = sosRange(a.sr);
+      entry.count++;
+      if (range) entry.ranged.push({ ...range, rx: Number.isFinite(a.rx) ? a.rx : -Infinity });
     }
   }
   const name = (node) => node.length > 24 ? node.slice(0, 24) + "…" : node;
@@ -700,8 +716,14 @@ function planRelayZones(alerts, nodes, nowSeconds) {
       return [{ node, x: nodes[node].x, y: nodes[node].y, radius_m: 3, n: a.n, rssi: a.rssi, nr,
         label: `${name(node)} hears ${a.n} ${a.n === 1 ? "phone" : "phones"}${a.n > 0 ? ` · closest ${a.rssi} dBm` : ""}${nr > 0 ? ` · ${nr} within ~0.5 m` : ""}` }];
     }),
-    sos: [...sos].map(([node, count]) => ({ node, x: nodes[node].x, y: nodes[node].y, count,
-      label: `SOS via ${name(node)} (phone within its Wi-Fi range)${count > 1 ? ` · ${count} reports` : ""}` })),
+    sos: [...sos].map(([node, { count, ranged }]) => {
+      // One band per SOS with a signal, newest three.
+      const bands = ranged.sort((p, q) => q.rx - p.rx).slice(0, 3);
+      const lines = bands.map((range) => sosRangeText(name(node), range));
+      if (bands.length < count) lines.push(bands.length ? "(other phones within its Wi-Fi range)" : "(phone within its Wi-Fi range)");
+      return { node, x: nodes[node].x, y: nodes[node].y, count, bands,
+        label: `SOS via ${name(node)}${count > 1 ? ` · ${count} reports` : ""}`, lines };
+    }),
   };
 }
 try { PLAN.signal = localStorage.getItem("rn-plan-signal") !== "off"; } catch (e) { /* storage blocked: default on */ }
@@ -826,6 +848,18 @@ function drawPlan() {
     g.beginPath(); g.arc(X, Y, radius, 0, 2 * Math.PI); g.fill(); g.stroke();
     phoneLabels.push({ x: X, y: Math.max(12, Y - radius - 12), lines: [zone.label] });
   }
+  // SOS distance bands (rough range from the relay's Wi-Fi signal), under the pins.
+  for (const zone of zones.sos) {
+    const p = pos(zone.node), X = sx(p[0]), Y = sy(p[1]);
+    for (const band of zone.bands) {
+      g.fillStyle = C.bad; g.globalAlpha = 0.16;
+      g.beginPath(); g.arc(X, Y, band.outer * k, 0, 2 * Math.PI); g.arc(X, Y, band.inner * k, 0, 2 * Math.PI, true); g.fill();
+      g.strokeStyle = C.bad; g.globalAlpha = 0.5; g.lineWidth = 1; g.setLineDash([4, 4]);
+      g.beginPath(); g.arc(X, Y, band.outer * k, 0, 2 * Math.PI); g.stroke();
+      g.beginPath(); g.arc(X, Y, band.inner * k, 0, 2 * Math.PI); g.stroke();
+      g.setLineDash([]); g.globalAlpha = 1;
+    }
+  }
   for (const zone of zones.sos) {
     const p = pos(zone.node), nodeX = sx(p[0]), nodeY = sy(p[1]);
     if (nodeX < 0 || nodeX > W || nodeY < 0 || nodeY > H) continue;
@@ -838,9 +872,7 @@ function drawPlan() {
       g.beginPath(); g.moveTo(x, y + 9); g.lineTo(x - 6, y); g.arc(x, y, 6, Math.PI, 2 * Math.PI); g.closePath(); g.fill(); g.stroke();
     }
     zoneOccupied.push({ x: X - 7, y: Y - 13, w: 20, h: 23 });
-    const nodeName = zone.node.length > 24 ? zone.node.slice(0, 24) + "…" : zone.node;
-    sosLabels.push({ x: X, y: Y, lines: [`SOS via ${nodeName}${zone.count > 1 ? ` · ${zone.count} reports` : ""}`,
-                                      "(phone within its Wi-Fi range)"] });
+    sosLabels.push({ x: X, y: Y, lines: [zone.label, ...zone.lines] });
   }
   // SOS descriptions take the available label space before phone counts.
   if (PLAN.labels) for (const label of [...sosLabels, ...phoneLabels]) {
