@@ -78,6 +78,7 @@ section.plan h2 { display: flex; gap: 12px; align-items: baseline; flex: 0 0 aut
 #plan-key { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; min-height: 15px;
             margin-bottom: 7px; font-size: 11px; color: var(--muted); }
 #plan-key .plan-hint { margin-left: auto; white-space: nowrap; }
+#plan-zone-key { flex: 0 0 auto; margin: 0 0 7px; font-size: 11px; color: var(--muted); }
 #plan-signal-key { display: flex; align-items: center; gap: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #plan-signal-key span { display: inline-flex; align-items: center; gap: 4px; }
 #plan-signal-key i { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
@@ -224,6 +225,7 @@ h2 small { text-transform: none; letter-spacing: 0; font-weight: 600; font-size:
       </span>
       <span class="plan-hint">Purple dashed circle = suggested relay spot · scroll to zoom · drag to pan</span>
     </div>
+    <div id="plan-zone-key">Halo = phones heard by that relay (zone, not a position)</div>
     <div id="plan-body">
       <div id="planwrap"><canvas id="plan" aria-label="Floor plan; scroll to zoom, drag empty space to pan or a relay to move it"></canvas></div>
       <aside id="plan-people" aria-label="People on the floor plan">
@@ -563,13 +565,14 @@ $("theme").onclick = () => setTheme(document.documentElement.dataset.theme === "
 try { setTheme(localStorage.getItem("rn-theme") || "dark"); } catch (e) { setTheme("dark"); }
 
 // ---------- polling ----------
-let lastOk = 0, busy = false;
+let lastOk = 0, busy = false, planReady = false;
 function render(s) {
   canSend = !!s.can_send;
   renderLink(s);
   renderNodes(s.nodes);
   renderCounts(s.alerts);
   renderFeed(s.alerts);
+  updatePlanAlerts(s);
   const st = s.stats || {};
   $("stats").textContent = `Messages ${st.received ?? 0} · duplicates dropped ${st.duplicates ?? 0} · non-JSON lines ignored ${st.ignored ?? 0}`;
 }
@@ -588,7 +591,12 @@ async function refresh() {
     busy = false;
   }
 }
-function tick() { $("clock").textContent = new Date().toLocaleTimeString([], { hour12: false }); }
+function tick() {
+  $("clock").textContent = new Date().toLocaleTimeString([], { hour12: false });
+  // The first tick precedes PLAN initialization. Later ticks also expire phone
+  // zones when either existing poll is stalled or offline; no extra timer.
+  if (planReady && PLAN.alerts.length) drawPlan();
+}
 
 buildMap();
 tick();
@@ -655,7 +663,47 @@ setInterval(refreshRemote, 300);
 
 // ---- floor plan: SLAM map, spotter path, relays, people (all in metres, map frame from the dashboard) ----
 const PLAN = { data: null, img: null, imgV: -1, view: null, manualView: null,
-               drag: null, dragPos: null, pan: null, labels: true, rawScan: null, signal: true, highlight: null, rows: new Map() };
+               drag: null, dragPos: null, pan: null, labels: true, rawScan: null, signal: true, highlight: null, rows: new Map(),
+               alerts: [], alertClock: null };
+planReady = true;
+function updatePlanAlerts(state, monotonicNow = performance.now()) {
+  PLAN.alerts = Array.isArray(state.alerts) ? state.alerts : [];
+  PLAN.alertClock = Number.isFinite(state.now) && Number.isFinite(monotonicNow)
+    ? { serverNow: state.now, receivedAt: monotonicNow } : null;
+  drawPlan();
+}
+function planZoneNow(monotonicNow = performance.now()) {
+  const clock = PLAN.alertClock;
+  return clock && Number.isFinite(monotonicNow)
+    ? clock.serverNow + Math.max(0, monotonicNow - clock.receivedAt) / 1000 : NaN;
+}
+function planRelayZones(alerts, nodes, nowSeconds) {
+  const phones = new Map(), sos = new Map();
+  for (const a of Array.isArray(alerts) ? alerts : []) {
+    if (!a || typeof a !== "object" || (a.t !== "PHONE" && a.t !== "SOS")) continue;
+    const node = a.z || a.src;
+    if (typeof node !== "string" || !nodes || !Object.prototype.hasOwnProperty.call(nodes, node)) continue;
+    const p = nodes[node];
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+    if (a.t === "PHONE") {
+      if (!Number.isFinite(a.rx) || !Number.isFinite(nowSeconds) || nowSeconds - a.rx < 0 || nowSeconds - a.rx > 60) continue;
+      if (!phones.has(node) || phones.get(node).rx < a.rx) phones.set(node, a);
+    } else if (!Number.isFinite(a.acked)) {
+      sos.set(node, (sos.get(node) || 0) + 1); // handled alone does not acknowledge an SOS.
+    }
+  }
+  const name = (node) => node.length > 24 ? node.slice(0, 24) + "…" : node;
+  return {
+    phones: [...phones].flatMap(([node, a]) => {
+      if (!Number.isSafeInteger(a.n) || a.n < 0 || !Number.isFinite(a.rssi) || a.rssi < -150 || a.rssi > 0) return [];
+      const nr = Number.isSafeInteger(a.nr) && a.nr >= 0 && a.nr <= a.n ? a.nr : 0;
+      return [{ node, x: nodes[node].x, y: nodes[node].y, radius_m: 3, n: a.n, rssi: a.rssi, nr,
+        label: `${name(node)} hears ${a.n} ${a.n === 1 ? "phone" : "phones"}${a.n > 0 ? ` · closest ${a.rssi} dBm` : ""}${nr > 0 ? ` · ${nr} within ~0.5 m` : ""}` }];
+    }),
+    sos: [...sos].map(([node, count]) => ({ node, x: nodes[node].x, y: nodes[node].y, count,
+      label: `SOS via ${name(node)} (phone within its Wi-Fi range)${count > 1 ? ` · ${count} reports` : ""}` })),
+  };
+}
 try { PLAN.signal = localStorage.getItem("rn-plan-signal") !== "off"; } catch (e) { /* storage blocked: default on */ }
 function signalControl() {
   $("plan-signal").setAttribute("aria-pressed", String(PLAN.signal));
@@ -684,7 +732,7 @@ function planBounds(d) {
   for (const wall of planWalls(d)) { add(wall[0], wall[1]); add(wall[2], wall[3]); }
   add(d.pose[0], d.pose[1]);
   for (const p of d.path) add(p[0], p[1]);
-  for (const n of Object.values(d.nodes)) add(n.x, n.y);
+  for (const n of Object.values(d.nodes)) if (n) add(n.x, n.y);
   for (const p of d.persons) if (freshPerson(p)) add(p.x, p.y);
   if (!xs.length) add(0, 0);
   let x0 = Math.min(...xs) - 0.3, x1 = Math.max(...xs) + 0.3, y0 = Math.min(...ys) - 0.3, y1 = Math.max(...ys) + 0.3;
@@ -757,8 +805,48 @@ function drawPlan() {
   // relay chain links: spotter -> B2 -> B1 -> BASE (where positions are known)
   const pos = (id) => {
     if (PLAN.drag === id && PLAN.dragPos) return PLAN.dragPos;
-    const n = d.nodes[id]; return n ? [n.x, n.y] : null;
+    const n = d.nodes[id]; return n && Number.isFinite(n.x) && Number.isFinite(n.y) ? [n.x, n.y] : null;
   };
+  // Radio zones are attached to marked relays, never to inferred phone fixes.
+  // Reserve primary glyphs before placing their lower-priority zone text.
+  const zones = planRelayZones(PLAN.alerts, d.nodes, planZoneNow());
+  const zoneOccupied = occupied.slice();
+  const reserve = (x, y) => {
+    if (Number.isFinite(x) && Number.isFinite(y)) zoneOccupied.push({ x: sx(x) - 28, y: sy(y) - 24, w: 56, h: 48 });
+  };
+  for (const id of Object.keys(d.nodes)) { const p = pos(id); if (p) reserve(p[0], p[1]); }
+  for (const relay of d.relays || []) if (relay) reserve(relay.x, relay.y);
+  for (const p of d.persons) reserve(p.x, p.y);
+  reserve(d.pose[0], d.pose[1]);
+  g.save();
+  const phoneLabels = [], sosLabels = [];
+  for (const zone of zones.phones) {
+    const p = pos(zone.node), X = sx(p[0]), Y = sy(p[1]), radius = zone.radius_m * k;
+    g.fillStyle = "rgba(100,175,255,0.12)"; g.strokeStyle = "rgba(120,185,255,0.45)"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(X, Y, radius, 0, 2 * Math.PI); g.fill(); g.stroke();
+    phoneLabels.push({ x: X, y: Math.max(12, Y - radius - 12), lines: [zone.label] });
+  }
+  for (const zone of zones.sos) {
+    const p = pos(zone.node), nodeX = sx(p[0]), nodeY = sy(p[1]);
+    if (nodeX < 0 || nodeX > W || nodeY < 0 || nodeY > H) continue;
+    const X = Math.max(8, Math.min(W - 16, nodeX + 20));
+    const Y = Math.max(14, Math.min(H - 18, nodeY - 22));
+    // Stacked pins count reports at one relay zone, not separate phone positions.
+    for (let i = Math.min(3, zone.count) - 1; i >= 0; i--) {
+      const x = X + 3 * i, y = Y - 3 * i;
+      g.fillStyle = "#ff8b8b"; g.strokeStyle = "#0d1014"; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(x, y + 9); g.lineTo(x - 6, y); g.arc(x, y, 6, Math.PI, 2 * Math.PI); g.closePath(); g.fill(); g.stroke();
+    }
+    zoneOccupied.push({ x: X - 7, y: Y - 13, w: 20, h: 23 });
+    const nodeName = zone.node.length > 24 ? zone.node.slice(0, 24) + "…" : zone.node;
+    sosLabels.push({ x: X, y: Y, lines: [`SOS via ${nodeName}${zone.count > 1 ? ` · ${zone.count} reports` : ""}`,
+                                      "(phone within its Wi-Fi range)"] });
+  }
+  // SOS descriptions take the available label space before phone counts.
+  if (PLAN.labels) for (const label of [...sosLabels, ...phoneLabels]) {
+    planZoneLabel(g, label.x, label.y, label.lines, zoneOccupied);
+  }
+  g.restore();
   const health = d.health || {};
   const hcol = (id) => ({ green: C.ok, amber: C.warn }[health[id]] || C.off);
   let prev = [d.pose[0], d.pose[1]];
@@ -818,6 +906,36 @@ function drawPlan() {
   const m = k >= 60 ? 1 : k >= 25 ? 2 : 5;
   g.strokeStyle = "#cfd6dd"; g.lineWidth = 3; g.beginPath(); g.moveTo(16, H - 16); g.lineTo(16 + m * k, H - 16); g.stroke();
   g.fillStyle = "#cfd6dd"; g.font = "13px sans-serif"; g.fillText(`${m} m`, 16, H - 22);
+}
+function planZoneLabel(g, x, y, lines, occupied) {
+  const W = g.canvas.clientWidth, H = g.canvas.clientHeight;
+  if (x < 0 || x > W || y < 0 || y > H) return false;
+  g.font = "bold 10px sans-serif";
+  const w = Math.max(...lines.map((text) => g.measureText(text).width)) + 10, h = lines.length * 13 + 8;
+  if (w > W - 16 || h > H - 16) return false;
+  const positions = [[x + 18, y - h - 16], [x - w / 2, y - h - 18], [x - w - 18, y - h - 16],
+                     [x + 18, y + 16], [x - w - 18, y + 16]];
+  // A bounded edge scan finds empty space in a crowded relay zone. Its leader
+  // identifies the zone; no label is allowed to cover primary marker bounds.
+  for (let row = 0; row < 8; row++) {
+    const top = 8 + row * Math.max(1, (H - h - 16) / 7);
+    positions.push([8, top], [W - w - 8, top]);
+  }
+  const overlaps = (a, b) => a.x < b.x + b.w + 3 && a.x + a.w + 3 > b.x && a.y < b.y + b.h + 3 && a.y + a.h + 3 > b.y;
+  let box;
+  for (const [left, top] of positions) {
+    const candidate = { x: Math.max(8, Math.min(W - w - 8, left)), y: Math.max(8, Math.min(H - h - 8, top)), w, h };
+    if (!occupied.some((other) => overlaps(candidate, other))) { box = candidate; break; }
+  }
+  if (!box) return false;
+  occupied.push(box);
+  g.strokeStyle = "rgba(195,215,235,0.55)"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(x, y);
+  g.lineTo(Math.max(box.x, Math.min(box.x + w, x)), Math.max(box.y, Math.min(box.y + h, y))); g.stroke();
+  g.fillStyle = "rgba(13,16,20,0.88)"; g.fillRect(box.x, box.y, w, h);
+  g.fillStyle = "#f4f6f8";
+  lines.forEach((text, i) => g.fillText(text, box.x + 5, box.y + 14 + 13 * i));
+  return true;
 }
 function markerText(g, x, y, text, occupied) {
   g.font = "bold 10px sans-serif";
