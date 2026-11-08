@@ -476,6 +476,24 @@ static String cleanText(const String& in, size_t maxBytes) {
   return out;
 }
 
+// RSSI (dBm) at this AP of the phone that is posting the SOS, from the station list; 0 = unknown.
+// One phone connected: it is that one. Several: match the HTTP client's IP through the DHCP leases.
+static int sosPhoneRssi() {
+  wifi_sta_list_t sl;
+  if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK || sl.num <= 0) return 0;
+  if (sl.num == 1) return sl.sta[0].rssi;
+  esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+  if (!nif) return 0;
+  int n = min((int)sl.num, (int)ESP_WIFI_MAX_CONN_NUM);
+  esp_netif_pair_mac_ip_t pairs[ESP_WIFI_MAX_CONN_NUM];
+  for (int i = 0; i < n; i++) memcpy(pairs[i].mac, sl.sta[i].mac, 6);
+  if (esp_netif_dhcps_get_clients_by_mac(nif, n, pairs) != ESP_OK) return 0;
+  uint32_t ip = (uint32_t)web.client().remoteIP();
+  for (int i = 0; i < n; i++)
+    if (pairs[i].ip.addr == ip) return sl.sta[i].rssi;
+  return 0;
+}
+
 static void handleSos() {
   uint32_t now = millis();
   if (now - lastSos < SOS_MIN_GAP_MS && lastSos != 0) { portalRedirect(); return; }
@@ -508,6 +526,9 @@ static void handleSos() {
   doc["msg"] = msg;
   if (people) doc["p"] = people;
   if (inj >= 0) doc["inj"] = inj;  // 0 none, 1 hurt but mobile, 2 trapped
+  int sr = sosPhoneRssi();          // how close the phone is to this relay (distance ring on the floor plan)
+  // only if it fits: originate adds id/src/ttl/rt (~40 B) and a relay hop adds rt + q (~15 B), limit MSG_MAX
+  if (sr < 0 && measureJson(doc) + 70 <= (size_t)MSG_MAX) doc["sr"] = sr;
   originate(doc, true);
   SosRec& rec = sosLog[sosNext];
   sosNext = (sosNext + 1) % 8;
