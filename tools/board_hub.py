@@ -342,6 +342,25 @@ def make_handler(hub, token):
             if q is None:
                 return
             parts = [unquote(x) for x in urlparse(self.path).path.strip("/").split("/")]
+            if parts[0] == "net":
+                # laptop network view, to find devices on the Ethernet port (e.g. the Pi)
+                out = {}
+                cmds = [("ipconfig", ["ipconfig"]), ("arp", ["arp", "-a"]),
+                        ("neigh6", ["netsh", "interface", "ipv6", "show", "neighbors"])]
+                host = q.get("ping", [""])[0]
+                if host and re.fullmatch(r"[A-Za-z0-9.:%-]{1,80}", host):
+                    cmds = [("ping", ["ping", "-n", "2", host])]
+                for name, cmd in cmds:
+                    try:
+                        r = subprocess.run(cmd, capture_output=True, timeout=20, stdin=subprocess.DEVNULL,
+                                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                        try:
+                            out[name] = r.stdout.decode("utf-8")
+                        except UnicodeDecodeError:
+                            out[name] = r.stdout.decode("mbcs", "replace")  # Chinese Windows: GBK
+                    except Exception as e:
+                        out[name] = str(e)
+                return self.reply(200, out)
             if parts[0] in ("dash", "dashboard"):
                 # backup command-post dashboard: http://127.0.0.1:8765/dash?token=...
                 path = os.path.join(HERE, "dashboard.html")
@@ -378,6 +397,56 @@ def make_handler(hub, token):
                     lines = list(b.lines)[-n:]
                 return self.reply(200, {"label": parts[1], "port": b.dev, "seq": b.seq, "lines": lines})
             self.reply(404, {"error": "unknown path"})
+
+        def do_CONNECT(self):
+            """HTTP CONNECT tunnel to a device on the laptop's private LAN (the Pi on the Ethernet port).
+            Same auth as the rest (tailnet/loopback + X-Token). Targets: private IPv4, ports 22/80/5000/8080."""
+            ip = ipaddress.ip_address(self.client_address[0])
+            if not ((ip.is_loopback or ip in tailnet) and self.headers.get("X-Token") == token):
+                self.send_error(403)
+                return
+            host, _, port = self.path.rpartition(":")
+            try:
+                tip, port = ipaddress.ip_address(host), int(port)
+            except ValueError:
+                self.send_error(400)
+                return
+            if not tip.is_private or tip.is_loopback or tip in tailnet or port not in (22, 80, 5000, 8080):
+                self.send_error(403, "target not allowed")
+                return
+            import socket
+            try:
+                up = socket.create_connection((str(tip), port), timeout=8)
+            except OSError as e:
+                self.send_error(502, str(e))
+                return
+            self.send_response(200, "Connection established")
+            self.end_headers()
+            self.close_connection = True
+            down = self.connection
+            up.settimeout(None)
+            down.settimeout(None)
+
+            def pump(a, b):
+                try:
+                    while True:
+                        d = a.recv(65536)
+                        if not d:
+                            break
+                        b.sendall(d)
+                except OSError:
+                    pass
+                for sk in (a, b):
+                    try:
+                        sk.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+
+            t = threading.Thread(target=pump, args=(up, down), daemon=True)
+            t.start()
+            pump(down, up)
+            t.join(5)
+            up.close()
 
         def do_POST(self):
             try:
