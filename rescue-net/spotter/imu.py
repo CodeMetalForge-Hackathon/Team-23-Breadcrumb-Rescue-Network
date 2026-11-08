@@ -98,6 +98,17 @@ class Imu:
                 time.sleep(2)
 
 
+def roll_deg(sample, axis, ref=REF):
+    """Rig roll in degrees, clockwise seen from behind the lens = positive, from the sideways axis
+    ("x", "-x", "y" or "-y": which accelerometer axis grows when the rig rolls clockwise). 0 if unknown."""
+    if sample is None or not axis:
+        return 0.0
+    sign, name = (-1, axis[1:]) if axis.startswith("-") else (1, axis.lstrip("+"))
+    i = "xyz".index(name)
+    a = (sample.ax, sample.ay, sample.az)
+    return math.degrees(math.atan2(sign * a[i], a[2]) - math.atan2(sign * ref[i], ref[2]))
+
+
 if __name__ == "__main__":                                # quick check: python3 -m spotter.imu
     logging.basicConfig(level=logging.INFO)
     imu = Imu().start()

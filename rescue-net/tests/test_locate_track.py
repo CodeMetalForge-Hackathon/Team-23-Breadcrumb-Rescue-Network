@@ -105,16 +105,74 @@ def test_track_ids_stable_and_second_person_new_id():
 
 def test_posture_debounce_and_alert_timing():
     tr = Tracker()
-    fired = []
-    seq = ["U", "U", "U", "D", "U", "U", "D", "D", "D", "D", "D"]
+    fired, states = [], []
+    seq = ["U", "U", "U", "U", "D", "?", "D", "D", "?", "D", "D", "D", "D"]
     for i, ps in enumerate(seq):
         now = i * 0.1
         tr.update([ob(20, ps=ps)], [], now)
+        states.append(tr.tracks[0].ps)
         fired += [(i, t.ps) for t in tr.due(now, cooldown_s=10)]
-    # first alert when confirmed (3rd frame); the single "D" at i=3 does not flip it; going down fires at once
-    assert fired[0] == (2, "U")
-    assert all(ps == "U" for i, ps in fired if i < 7)
-    assert fired[-1][1] == "D" and len(fired) == 2
+    # confirmed at the 3rd frame with posture still unknown; U after 4 U votes; D only once 5 of 7 say D
+    assert fired[0] == (2, None) and states[3] == "U"
+    first_d = states.index("D")
+    assert seq[max(0, first_d - 6):first_d + 1].count("D") >= 5
+    assert fired[-1] == (first_d, "D") and len(fired) == 2     # going down fires at once
+
+
+def test_question_marks_never_make_down():
+    tr = Tracker()
+    for i, ps in enumerate(["D", "?", "D", "?", "D", "?", "D", "?"]):
+        tr.update([ob(20, ps=ps)], [], i * 0.1)
+    assert tr.tracks[0].ps is None
+    assert tr.persons(0.7)[0]["ps"] == "?"
+
+
+# --- posture (3 states) ----------------------------------------------------------------------------------------
+
+def body(x0, y0, x1, y1, torso_deg, roll=0.0, x_scale=16 / 9):
+    """Pose detection whose shoulders -> hips line is torso_deg from vertical (in the image, after roll)."""
+    k = np.zeros((17, 3), np.float32)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    a = math.radians(torso_deg + roll)
+    L = 0.25
+    dx, dy = math.sin(a) * L / x_scale, math.cos(a) * L
+    k[5] = k[6] = (cx - dx / 2, cy - dy / 2, 1)
+    k[11] = k[12] = (cx + dx / 2, cy + dy / 2, 1)
+    return PoseDetection("person", 0.9, x0, y0, x1, y1, k)
+
+
+def test_posture_three_states():
+    from spotter.posture import classify
+    c = cfg()
+    assert classify(body(0.3, 0.2, 0.5, 0.8, 5), c)[0] == "U"
+    assert classify(body(0.3, 0.2, 0.5, 0.8, 45), c)[0] == "?"           # in between: can't tell
+    assert classify(body(0.2, 0.5, 0.7, 0.7, 85), c)[0] == "D"           # lying, fully in view
+    # cut by the bottom edge with no keypoints: wide box says nothing
+    assert classify(PoseDetection("person", 0.9, 0.2, 0.5, 0.8, 1.0, np.zeros((17, 3))), c)[0] == "?"
+
+
+def test_posture_vetoes_only_doubtful_down():
+    from spotter.posture import classify
+    c = cfg()
+    cut = body(0.0, 0.3, 0.6, 1.0, 65)                    # 65 deg, box cut by the image edge
+    assert classify(cut, c)[0] == "D"
+    assert classify(cut, c, lidar_body=True)[0] == "?"    # the body crosses the scan plane
+    assert classify(cut, c, extent_m=1.1)[0] == "?"       # 1.1 m visible: not lying flat
+    sure = body(0.2, 0.5, 0.7, 0.7, 85)                   # clearly horizontal, fully in view
+    assert classify(sure, c, lidar_body=True)[0] == "D"   # a wall right behind them does not hide them
+    assert classify(body(0.3, 0.1, 0.5, 0.9, 45), c, extent_m=1.2)[0] == "U"
+
+
+def test_posture_roll_correction():
+    from spotter.imu import ImuSample, roll_deg
+    from spotter.posture import classify
+    c = cfg()
+    tilted = body(0.3, 0.2, 0.5, 0.8, 0, roll=40)          # standing, rig rolled 40 deg
+    assert classify(tilted, c)[0] == "?"
+    assert classify(tilted, c, roll_deg=40)[0] == "U"
+    s = ImuSample(0, 21.0 * math.sin(math.radians(30)) + 1.45, 1.33, 21.0 * math.cos(math.radians(30)), 30)
+    assert roll_deg(s, "x") == pytest.approx(30, abs=4) and roll_deg(s, "-x") == pytest.approx(-30, abs=4)
+    assert roll_deg(s, "") == 0 and roll_deg(None, "x") == 0
 
 
 def test_cooldown_repeats():

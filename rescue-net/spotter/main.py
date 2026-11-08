@@ -13,6 +13,7 @@ from common.protocol import make_msg
 from spotter import calib, debugview, fusion, locate
 from spotter.config import DEFAULT_PATH, Config
 from spotter.debounce import Debouncer, RateLimiter
+from spotter.imu import roll_deg
 from spotter.tracker import Tracker
 
 log = logging.getLogger("spotter")
@@ -135,15 +136,19 @@ def main():
             # people: locate in the LiDAR frame, track, one alert stream per person
             scan = lid.latest() if lid else None
             people = {id(p.det): p for p in analysis.persons}
-            cam_obs = [locate.observe(p.det, "C", scan, cfg.data) for p in analysis.persons
+            imu_now = imu.latest() if imu else None
+            roll = roll_deg(imu_now, cfg["imu_roll_axis"])         # 0 until the sideways axis is known
+            cam_obs = [locate.observe(p.det, "C", scan, cfg.data, roll_deg=roll) for p in analysis.persons
                        if p.decision != "rejected"]
-            th_obs = [locate.observe(d, "T", scan, cfg.data, x_scale=th_det.x_scale) for d in (th_dets or ())]
-            recorder.step(cfg.data, [o.det for o in cam_obs], th_dets, scan)
+            th_obs = [locate.observe(d, "T", scan, cfg.data, x_scale=th_det.x_scale, roll_deg=roll)
+                      for d in (th_dets or ())]
+            recorder.step(cfg.data, cam_obs, th_obs, scan, imu_now)
             tracker.merge_deg = cfg["track_merge_deg"]
             tracker.update(cam_obs, th_obs, now)
             shared["persons"] = tracker.persons(now)
             if view:
-                view.labels = {id(t.det): f"#{t.id} {t.b:.0f}deg" + ("" if t.r is None else f" {t.r:.1f}m{t.rs}")
+                view.labels = {id(t.det): f"#{t.id} [{t.ps or '?'}] {t.b:.0f}deg"
+                               + ("" if t.r is None else f" {t.r:.1f}m{t.rs}")
                                for t in tracker.tracks if t.last_seen == now}
             for t in tracker.due(now, cfg["cooldown_s"]):
                 outbox.append(person_alert(t, people.get(id(t.det)), cfg, now))

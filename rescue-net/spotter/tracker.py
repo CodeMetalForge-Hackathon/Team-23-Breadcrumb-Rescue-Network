@@ -2,8 +2,9 @@
 
 Each frame: the Pi camera's people and the thermal camera's people (spotter.locate.Obs) are paired by bearing
 (same person seen by both = one observation, src "CT"), then matched to the existing tracks by bearing and range.
-A track is confirmed after 3 hits, and dropped after max_age_s without one. Posture only flips when 4 of the
-last 6 frames agree, so one odd frame does not turn "down" into "up" and back.
+A track is confirmed after 3 hits, and dropped after max_age_s without one. Posture is "U", "D" or None
+(can't tell): D needs 5 of the last 7 frames to say D ("?" frames never count towards it) and holds while 3 do;
+U needs 4 of 7.
 """
 from collections import deque
 
@@ -23,7 +24,8 @@ def pair_cameras(cam_obs, th_obs, merge_deg):
         used_t.add(j)
         c, t = cam_obs[i], th_obs[j]
         r, rs = (c.r, c.rs) if c.rs == "L" or t.r is None else (t.r, t.rs) if t.rs == "L" else (c.r, c.rs)
-        out.append(Obs("CT", c.b, r, rs, c.ps or t.ps, max(c.c, t.c), c.det, c.u))
+        ps = c.ps if t.ps in (None, "?", c.ps) else t.ps if c.ps in (None, "?") else "?"   # they disagree: "?"
+        out.append(Obs("CT", c.b, r, rs, ps, max(c.c, t.c), c.det, c.u, c.why or t.why))
     out += [c for i, c in enumerate(cam_obs) if i not in used_c]
     out += [t for j, t in enumerate(th_obs) if j not in used_t]
     return out
@@ -34,7 +36,7 @@ class Track:
         self.id, self.first_seen = tid, now
         self.b, self.r, self.rs, self.c, self.det, self.u = obs.b, obs.r, obs.rs, obs.c, obs.det, obs.u
         self.seen = {}                       # "C" / "T" -> last time that camera saw this person
-        self.ps_hist = deque(maxlen=6)
+        self.ps_hist = deque(maxlen=7)
         self.ps = None
         self.hits, self.last_seen = 0, now
         self.last_alert, self.alerted_ps = None, None
@@ -47,14 +49,13 @@ class Track:
             self.seen[s] = now
         self.c, self.det, self.u = obs.c, obs.det, obs.u
         self.ps_hist.append(obs.ps)
-        votes = [p for p in self.ps_hist if p]
-        if self.ps is None:
-            if votes:
-                self.ps = max(("D", "U"), key=votes.count)
+        d, u = self.ps_hist.count("D"), self.ps_hist.count("U")
+        if d >= 5 or (self.ps == "D" and d >= 3):
+            self.ps = "D"
+        elif u >= 4 or (self.ps == "U" and u >= 2 and d < 3):
+            self.ps = "U"
         else:
-            other = "U" if self.ps == "D" else "D"
-            if votes.count(other) >= 4:
-                self.ps = other
+            self.ps = None
 
     def update(self, obs, now, alpha=0.5):
         self.b = (self.b + alpha * angdiff(obs.b, self.b)) % 360.0
@@ -130,7 +131,7 @@ class Tracker:
         out = []
         for i, t in enumerate(live[:limit]):
             p = {"id": t.id, "b": round(t.b), "r": None if t.r is None else round(t.r, 1), "rs": t.rs,
-                 "src": t.src(now) or "-", "ps": t.ps or "-", "c": t.c}
+                 "src": t.src(now) or "-", "ps": t.ps or "?", "c": t.c}
             kp = keypoints_pct(t.det) if i < kp_max else None
             if kp is not None:
                 p["kp"] = kp

@@ -29,12 +29,15 @@ class Recorder:
         self.folder = os.path.expanduser(folder)
         self.prev, self.f, self.until, self.path, self.last_scan, self.n = 0, None, 0.0, None, None, 0
 
-    def step(self, cfg, cam_dets, th_dets, scan):
+    def step(self, cfg, cam_obs, th_obs, scan, imu=None):
+        """cam_obs / th_obs: spotter.locate.Obs; imu: spotter.imu.ImuSample or None."""
         val = float(cfg.get("calib_record_s", 0) or 0)
         now = time.time()
         if val > 0 and self.prev <= 0 and self.f is None:
             os.makedirs(self.folder, exist_ok=True)
-            self.path = os.path.join(self.folder, time.strftime("calib-%Y%m%d-%H%M%S.jsonl.gz"))
+            tag = "".join(ch for ch in str(cfg.get("calib_tag", "")) if ch.isalnum() or ch in "-_")
+            self.path = os.path.join(self.folder, "calib-" + (tag + "-" if tag else "")
+                                     + time.strftime("%Y%m%d-%H%M%S.jsonl.gz"))
             self.f, self.until, self.n = gzip.open(self.path, "wt"), now + val, 0
             log.info("calibration: recording %.0f s to %s", val, self.path)
         self.prev = val
@@ -43,9 +46,17 @@ class Recorder:
         if scan is not None and scan is not self.last_scan:           # one line per LiDAR revolution
             self.last_scan = scan
             a, d = scan
-            line = {"t": round(now, 3),
-                    "cam": [[round(v, 4) for v in (x.x0, x.y0, x.x1, x.y1, x.score)] for x in cam_dets],
-                    "th": [[round(v, 4) for v in (x.x0, x.y0, x.x1, x.y1, x.score)] for x in (th_dets or ())],
+            def boxes(obs):
+                return [[round(v, 4) for v in (o.det.x0, o.det.y0, o.det.x1, o.det.y1, o.det.score)] for o in obs]
+
+            def extra(obs):
+                return [{"k": None if getattr(o.det, "kpts", None) is None else
+                         np.round(np.asarray(o.det.kpts, float), 3).tolist(),
+                         "ps": o.ps, "b": round(o.b, 1), "r": None if o.r is None else round(o.r, 2), "rs": o.rs}
+                        for o in obs]
+            line = {"t": round(now, 3), "cam": boxes(cam_obs), "th": boxes(th_obs or ()),
+                    "camk": extra(cam_obs), "thk": extra(th_obs or ()),
+                    "acc": None if imu is None else [round(imu.ax, 2), round(imu.ay, 2), round(imu.az, 2)],
                     "ang": np.round(np.asarray(a) * 10).astype(int).tolist(),
                     "mm": np.round(np.asarray(d)).astype(int).tolist()}
             self.f.write(json.dumps(line, separators=(",", ":")) + "\n")

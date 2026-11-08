@@ -11,10 +11,11 @@ from collections import namedtuple
 
 import numpy as np
 
-from spotter.posture import posture
+from spotter.posture import classify
 
-# src "C" = Pi camera, "T" = USB thermal camera. b in deg, r in m (or None), rs "L" (LiDAR) / "S" (box size).
-Obs = namedtuple("Obs", "src b r rs ps c det u")
+# src "C" = Pi camera, "T" = USB thermal camera. b in deg, r in m (or None), rs "L" (LiDAR) / "S" (box size),
+# ps "U" / "D" / "?", why = what the posture is based on (debug view).
+Obs = namedtuple("Obs", "src b r rs ps c det u why", defaults=("",))
 
 # per camera: config keys for field of view, yaw, direction (+1: image right = clockwise), and image h / w
 CAMERAS = {
@@ -58,18 +59,22 @@ def size_range(det, hfov, aspect_hw, ps, height_m=1.7, length_m=1.6):
     return None if ext < 0.02 else size / ext
 
 
-def observe(det, src, scan, cfg, x_scale=None):
-    """One detection -> Obs in the LiDAR frame."""
+def observe(det, src, scan, cfg, x_scale=None, roll_deg=0.0):
+    """One detection -> Obs in the LiDAR frame, with posture "U" / "D" / "?" (see spotter/posture.py)."""
     hfov_k, yaw_k, dir_k, aspect_hw = CAMERAS[src]
     hfov, yaw, direction = float(cfg[hfov_k]), float(cfg[yaw_k]), int(cfg[dir_k])
-    ps = posture(det, cfg, x_scale=x_scale or 1 / aspect_hw)
     u = (det.x0 + det.x1) / 2
     b = bearing(u, hfov, yaw, direction)
     r_l = lidar_range(scan, b, cfg["lidar_win_deg"], cfg["lidar_min_m"])
-    r_s = size_range(det, hfov, aspect_hw, ps)
+    r_down = size_range(det, hfov, aspect_hw, "D")
+    # the LiDAR return is this body (it crosses the scan plane), not the wall behind someone lying below it
+    body = r_l is not None and r_down is not None and r_l <= 1.4 * r_down + 0.3
+    extent = (det.y1 - det.y0) * 2 * math.tan(math.radians(hfov) / 2) * aspect_hw * r_l if body else None
+    ps, why = classify(det, cfg, x_scale or 1 / aspect_hw, roll_deg, extent, body)
+    r_s = r_down if ps == "D" else size_range(det, hfov, aspect_hw, "U")
     # LiDAR far behind what the box size says: it is looking past the person (lying below the scan plane)
     if r_l is not None and (r_s is None or r_l <= 1.8 * r_s + 0.5):
         r, rs = r_l, "L"
     else:
         r, rs = r_s, "S" if r_s is not None else None
-    return Obs(src, b, r, rs, ps, round(det.score * 100), det, u)
+    return Obs(src, b, r, rs, ps, round(det.score * 100), det, u, why)

@@ -166,9 +166,9 @@ def test_posture_from_keypoints_and_box():
     assert posture(PoseDetection("person", 0.9, 0.4, 0.2, 0.6, 0.9, k), c) == "U"
     k[[11, 12], :2] = [[0.68, 0.32], [0.68, 0.36]]        # hips beside the shoulders: lying
     assert posture(PoseDetection("person", 0.9, 0.3, 0.2, 0.8, 0.5, k), c) == "D"
-    wide = person(0.1, 0.6, 0.6, 0.8)                     # no keypoints: falls back to box shape
-    assert posture(wide, c) == "D"
-    assert posture(person(0.45, 0.2, 0.55, 0.9), c) == "U"
+    wide = person(0.1, 0.6, 0.6, 0.8)                     # no keypoints: box shape never says "down"
+    assert posture(wide, c) is None
+    assert posture(person(0.45, 0.2, 0.55, 0.9), c) == "U"   # uncut and clearly taller than wide
 
 
 def test_no_thermal_person_has_no_th():

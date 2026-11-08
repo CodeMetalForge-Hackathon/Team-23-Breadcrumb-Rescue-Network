@@ -16,7 +16,11 @@ DEFAULTS = {
     "heat_min_dt": 5.0, "heat_min_pixels": 3, "heat_conf": 40,
     "cooldown_s": 10, "hb_interval_s": 15,
     "serial_port": "", "baud": 115200, "debug_port": 8080,
-    "down_angle_deg": 55, "down_aspect": 1.3,      # posture: torso this far from vertical (or box this wide) = on the ground
+    # posture (spotter/posture.py): body segment >= down_angle_deg from vertical = on the ground, <= up_angle_deg =
+    # upright, in between "?"; LiDAR / height vetoes apply below down_sure_deg; >= upright_min_m visible = upright.
+    # imu_roll_axis: accelerometer axis that grows when the rig rolls clockwise seen from behind ("x", "-y", ...)
+    "down_angle_deg": 60, "up_angle_deg": 35, "down_sure_deg": 75, "upright_min_m": 0.9, "imu_roll_axis": "",
+    "down_aspect": 1.3,
     "bulk_period": 0.25, "bulk_gap": 0.003,        # live view over B2 Wi-Fi: seconds per round, seconds between chunks
     "thermal_detect": True, "thermal_det_every": 2, "thermal_min_score": 0.45,   # pose model on the USB thermal camera
     # where people are, in the LiDAR frame: camera field of view (deg), yaw (LiDAR angle of the optical axis),
@@ -24,7 +28,7 @@ DEFAULTS = {
     # calibrated 2026-11-08 with spotter/calib.py; the camera runs the 1536x864 sensor mode (cropped, ~47 deg)
     "cam_hfov": 48.0, "cam_yaw": 356.5, "cam_dir": 1, "th_hfov": 40.0, "th_yaw": 358.5, "th_dir": 1,
     "lidar_win_deg": 3.0, "lidar_min_m": 0.25, "track_merge_deg": 15.0,
-    "calib_record_s": 0,                           # > 0: record that many seconds of calibration data to ~/logs
+    "calib_record_s": 0, "calib_tag": "",          # > 0: record that many seconds of calibration data to ~/logs
 }
 
 
