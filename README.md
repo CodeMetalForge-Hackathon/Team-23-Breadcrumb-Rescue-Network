@@ -65,6 +65,49 @@ A responder walks into a building that has no GPS, cell service or Wi-Fi. They c
 | BASE, command post | Feather ESP32-S3 Reverse TFT on USB to the laptop |
 | Command post | Any laptop with Python 3, running the dashboard at http://localhost:5050 |
 
+## Photos from the build (Nov 8)
+
+### The spotter rig
+
+<img src="photos/2026-11-08_spotter_rig_front.jpg" width="640" alt="Spotter rig">
+
+The handheld spotter, taped onto the Pi kit box so one person can carry it. The RPLIDAR C1 sits on top at the left and scans the room for the map. In the middle is the USB thermal camera lens, with the Grove accelerometer above it; the accelerometer tells the map when the rig is tilted. Behind them is SP1, the Feather RP2040 LoRa board with its spring antenna, which sends alerts to the relays even when Wi-Fi is down. On the right is the Pi Camera Module 3, the main camera for person detection. Under the tape is the Raspberry Pi 5 with the AI HAT+, which runs YOLOv8s-pose on the Hailo-8. The whole rig runs from one USB power bank with no cable to the laptop.
+
+### Relay B2, the gateway
+
+<img src="photos/2026-11-08_relay_b2_lora_breakout.jpg" width="420" alt="Relay B2 with RFM9x LoRa breakout">
+
+B2 is the relay closest to the spotter. The ESP32-S3 Reverse TFT Feather is wired over SPI to a 900 MHz RFM9x LoRa breakout on the breadboard, so B2 can hear SP1's LoRa packets. It also runs the hidden `RESCUE-LINK` Wi-Fi network that the Pi uses for camera frames and LiDAR scans. The screen shows `HB<SP1`, the last packet was a heartbeat from the spotter; `b>B1`, bulk data goes next to B1; and a green `LoRa`, the radio is up.
+
+### Relay B1 on a LiPo battery
+
+<img src="photos/2026-11-08_relay_b1_on_lipo.jpg" width="560" alt="Relay B1 on a LiPo battery">
+
+B1 is the middle relay and runs from its own LiPo battery, so it can be dropped anywhere along the route. It also hosts the `RESCUE-TEAM-NEARBY` portal, where a trapped person's phone can send an SOS. `HB<B2` means it is hearing B2, `b>BASE` means bulk data goes on to BASE, and `AP 0` means no phone is on the portal right now.
+
+### BASE at the command post
+
+<img src="photos/2026-11-08_base_status_screen.jpg" width="560" alt="BASE status screen">
+
+BASE is the last node, plugged into the laptop by USB (`b>USB`). Everything it receives goes to the dashboard. `HB<B1` at -26 dBm shows that B1 is close by in this test.
+
+### How to read a relay screen
+
+Every node shows the same status lines:
+
+| Field | Meaning |
+|---|---|
+| `B1`, `B2`, `BASE` | Node name |
+| `chain` | Routing mode: messages hop along the chain SP1 > B2 > B1 > BASE |
+| `100%` | Battery level |
+| `rx N fwd N` | Packets received, and packets passed on to the next node |
+| `dup N drop N` | Duplicates ignored (the same alert heard twice), and packets not forwarded (frames that are not alerts, or a full queue). `drop` is not a loss rate. |
+| `HB<B2` | Type and sender of the last packet (`HB` is a heartbeat) |
+| `RSSI -35 dBm` | Signal strength of that packet. Closer to 0 is stronger. |
+| `b>BASE` (yellow) | Next hop for bulk data (camera frames, LiDAR) |
+| `AP 0` | Phones on the SOS portal (B1 only) |
+| `LoRa` / `noLR` | LoRa radio up (green) or missing (red) (B2 only) |
+
 ## Repository layout
 
 ```
