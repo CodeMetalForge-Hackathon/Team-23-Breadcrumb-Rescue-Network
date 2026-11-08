@@ -17,6 +17,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, request, send_from_directory
 
 from common import jsonlog
+from dashboard.mapview import MapState
 from dashboard.remote import Remote
 from common.protocol import extract_message, parse_line
 
@@ -50,7 +51,8 @@ class State:
         self.source = ""
         self.stats = {"received": 0, "duplicates": 0, "ignored": 0}
         self.sender = None                        # callable(line: str) -> None, set by a source that can write
-        self.remote = Remote()                    # camera / thermal / LiDAR from the spotter, via the bulk link
+        self.map = MapState()                     # SLAM floor plan, people and relay positions
+        self.remote = Remote(on_object=self.map.on_object)   # camera / thermal / LiDAR / meta via the bulk link
 
     def set_source(self, connected, source):
         with self.lock:
@@ -155,6 +157,8 @@ def handle_line(state, raw, record=True):
     if record:
         jsonlog.append("messages", {"rx": round(now, 3), "msg": msg})
     new = state.ingest(msg, now)
+    if new and msg.get("t") == "PERSON":
+        state.map.add_alert(msg, now)
     log.info("%s %s", "RX " if new else "DUP", json.dumps(msg, separators=(",", ":")))
 
 
@@ -296,6 +300,36 @@ def create_app(state):
         if data is None or name == "lidar":
             abort(404)
         return app.response_class(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/map")
+    def api_map():
+        snap = state.map.snapshot()
+        snap["health"] = {k: v["health"] for k, v in state.snapshot()["nodes"].items()}
+        return jsonify(snap)
+
+    @app.get("/api/map.png")
+    def api_map_png():
+        data = state.map.png_bytes()
+        if data is None:
+            abort(404)
+        return app.response_class(data, mimetype="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/map/node/<nid>")
+    def api_map_node(nid):
+        body = request.get_json(silent=True) or {}
+        try:
+            ok = state.map.set_node(nid, body.get("x"), body.get("y"), here=bool(body.get("here")),
+                                    clear=bool(body.get("clear")))
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            abort(400)
+        return jsonify(ok=True)
+
+    @app.post("/api/map/reset")
+    def api_map_reset():
+        state.map.reset()
+        return jsonify(ok=True)
 
     @app.post("/api/ack/<key>")
     def api_ack(key):
